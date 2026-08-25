@@ -1,0 +1,77 @@
+{
+  "name": "bom-weather",
+  "author": "Mark Williams",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "BOM Weather",
+    "uuid": "8f3c2a91-6b47-4e1d-9c5a-2d8e7f1b4a03",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "capabilities": [
+      "location",
+      "configurable"
+    ],
+    "messageKeys": {
+      "RequestType": 1,
+      "Status": 2,
+      "Location": 3,
+      "DayCount": 4,
+      "DaysPacked": 5,
+      "DetailIndex": 6,
+      "DisplayW": 7,
+      "DisplayH": 8,
+      "CondLine1": 9,
+      "CondLine2": 10,
+      "WarnTitle": 11,
+      "WarnSub": 12,
+      "WarnFull": 13,
+      "HasCoastal": 14,
+      "CoastalNow": 15,
+      "Cached": 16,
+      "SunTimes": 17,
+      "FdrNow": 18,
+      "WarnPacked": 19,
+      "Theme": 20,
+      "DayExtended": 90,
+      "RadarFrameCount": 100,
+      "RadarFrameIndex": 101,
+      "RadarChunk": 102,
+      "RadarOffset": 103,
+      "RadarTotalSize": 104,
+      "RadarComplete": 105,
+      "RadarNotice": 106,
+      "RadarRange": 107,
+      "DayCoastal": 110
+    },
+    "resources": {
+      "media": [
+        {
+          "menuIcon": true,
+          "type": "png",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "IMAGE_BOM_ICON",
+          "file": "images/bom_icon.png"
+        }
+      ]
+    }
+  }
+}

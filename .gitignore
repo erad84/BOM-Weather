@@ -1,0 +1,7 @@
+build/
+.lock-waf*
+_tmp/
+tmp_nat/
+tmp_syn/
+*.pyc
+.DS_Store
