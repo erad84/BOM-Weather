@@ -6,8 +6,16 @@ static Window *s_window;
 static MenuLayer *s_menu;
 static Window *s_warn_window;
 static ScrollLayer *s_warn_scroll;
+#if defined(PBL_PLATFORM_APLITE)
+static TextLayer *s_warn_text;
+#else
 static Layer *s_warn_canvas;
 static Layer *s_warn_hint;
+#endif
+static Window *s_warn_list_window;
+static MenuLayer *s_warn_list_menu;
+static int s_warn_focus;
+static int s_reopen_warn_list = 1;
 static TextLayer *s_toast;
 static char s_toast_text[48];
 static AppTimer *s_toast_timer;
@@ -15,7 +23,14 @@ static AppTimer *s_toast_timer;
 static int s_warn_pan_base;
 #endif
 
-#define WARN_ICON_S 56
+#if defined(PBL_PLATFORM_APLITE)
+#define WARN_DETAIL_ICON 24
+#else
+#define WARN_DETAIL_ICON 56
+#endif
+
+static void show_warn_list(void);
+static void show_warning_at(int i);
 
 static int radar_rows(void) {
   return HAS_RADAR ? 1 : 0;
@@ -309,30 +324,32 @@ static void warn_item_at(int i, int *type, const char **title, const char **body
   *body = g_weather.warn_full[0] ? g_weather.warn_full : g_weather.warn_sub;
 }
 
+#if !defined(PBL_PLATFORM_APLITE)
 static int warn_content_height(int width) {
   GFont title_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   GFont body_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   int y = 8;
-  int n = warn_item_count();
-  for (int i = 0; i < n; i++) {
-    int type;
-    const char *title;
-    const char *body;
-    warn_item_at(i, &type, &title, &body);
-    y += WARN_ICON_S + 8;
-    GSize ts = graphics_text_layout_get_content_size(
-        title, title_font, GRect(0, 0, width, 160),
-        GTextOverflowModeWordWrap, GTextAlignmentLeft);
-    y += ts.h + 2;
-    if (body && body[0]) {
-      GSize bs = graphics_text_layout_get_content_size(
-          body, body_font, GRect(0, 0, width, 2000),
-          GTextOverflowModeWordWrap, GTextAlignmentLeft);
-      y += bs.h;
-    }
-    y += 16;
+  int type;
+  const char *title;
+  const char *body;
+  warn_item_at(s_warn_focus, &type, &title, &body);
+  if (g_weather.warn_view_body[0]) {
+    body = g_weather.warn_view_body;
+  } else {
+    body = "Loading...";
   }
-  return y + 8;
+  y += WARN_DETAIL_ICON + 8;
+  GSize ts = graphics_text_layout_get_content_size(
+      title, title_font, GRect(0, 0, width, 240),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  y += ts.h + 2;
+  if (body && body[0]) {
+    GSize bs = graphics_text_layout_get_content_size(
+        body, body_font, GRect(0, 0, width, 8000),
+        GTextOverflowModeWordWrap, GTextAlignmentLeft);
+    y += bs.h;
+  }
+  return y + 24;
 }
 
 static void fill_tri(GContext *ctx, GPoint a, GPoint b, GPoint c) {
@@ -388,31 +405,210 @@ static void warn_canvas_update(Layer *layer, GContext *ctx) {
   GFont title_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   GFont body_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   int y = 8;
-  int n = warn_item_count();
-  graphics_context_set_text_color(ctx, theme_fg());
-  for (int i = 0; i < n; i++) {
-    int type;
-    const char *title;
-    const char *body;
-    warn_item_at(i, &type, &title, &body);
-    warn_icon_draw(ctx, GRect((width - WARN_ICON_S) / 2, y, WARN_ICON_S, WARN_ICON_S), type);
-    y += WARN_ICON_S + 8;
-    GSize ts = graphics_text_layout_get_content_size(
-        title, title_font, GRect(0, 0, width, 160),
-        GTextOverflowModeWordWrap, GTextAlignmentLeft);
-    graphics_draw_text(ctx, title, title_font, GRect(0, y, width, ts.h + 4),
-                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-    y += ts.h + 2;
-    if (body && body[0]) {
-      GSize bs = graphics_text_layout_get_content_size(
-          body, body_font, GRect(0, 0, width, 2000),
-          GTextOverflowModeWordWrap, GTextAlignmentLeft);
-      graphics_draw_text(ctx, body, body_font, GRect(0, y, width, bs.h + 4),
-                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-      y += bs.h;
-    }
-    y += 16;
+  int type;
+  const char *title;
+  const char *body;
+  warn_item_at(s_warn_focus, &type, &title, &body);
+  if (g_weather.warn_view_body[0]) {
+    body = g_weather.warn_view_body;
+  } else {
+    body = "Loading...";
   }
+  graphics_context_set_text_color(ctx, theme_fg());
+  warn_icon_draw(ctx, GRect((width - WARN_DETAIL_ICON) / 2, y, WARN_DETAIL_ICON, WARN_DETAIL_ICON), type);
+  y += WARN_DETAIL_ICON + 8;
+  GSize ts = graphics_text_layout_get_content_size(
+      title, title_font, GRect(0, 0, width, 240),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  graphics_draw_text(ctx, title, title_font, GRect(0, y, width, ts.h + 4),
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+  y += ts.h + 2;
+  if (body && body[0]) {
+    GSize bs = graphics_text_layout_get_content_size(
+        body, body_font, GRect(0, 0, width, 8000),
+        GTextOverflowModeWordWrap, GTextAlignmentLeft);
+    graphics_draw_text(ctx, body, body_font, GRect(0, y, width, bs.h + 4),
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+  }
+}
+
+static void warn_relayout(void) {
+  if (!s_warn_scroll || !s_warn_canvas) {
+    return;
+  }
+  GRect bounds = layer_get_bounds(scroll_layer_get_layer(s_warn_scroll));
+  const int pad = PBL_IF_ROUND_ELSE(18, 8);
+  int inner_w = bounds.size.w - pad * 2;
+  int content_h = warn_content_height(inner_w);
+  if (content_h < bounds.size.h) {
+    content_h = bounds.size.h;
+  }
+  layer_set_frame(s_warn_canvas, GRect(pad, 0, inner_w, content_h));
+  scroll_layer_set_content_size(s_warn_scroll, GSize(bounds.size.w, content_h));
+  layer_mark_dirty(s_warn_canvas);
+  if (s_warn_hint) {
+    layer_mark_dirty(s_warn_hint);
+  }
+}
+#else
+static void warn_relayout(void) {
+  if (!s_warn_scroll || !s_warn_text) {
+    return;
+  }
+  GRect bounds = layer_get_bounds(scroll_layer_get_layer(s_warn_scroll));
+  const int pad = 6;
+  int inner_w = bounds.size.w - pad * 2;
+  const char *body = g_weather.warn_view_body[0] ? g_weather.warn_view_body : "Loading...";
+  GSize sz = graphics_text_layout_get_content_size(
+      body, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+      GRect(0, 0, inner_w, 4000),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  int h = sz.h + 8;
+  if (h < bounds.size.h) {
+    h = bounds.size.h;
+  }
+  layer_set_frame(text_layer_get_layer(s_warn_text), GRect(pad, 2, inner_w, h));
+  scroll_layer_set_content_size(s_warn_scroll, GSize(bounds.size.w, h));
+  text_layer_set_text(s_warn_text, body);
+}
+#endif
+
+static uint16_t list_num_sections(MenuLayer *layer, void *ctx) {
+  (void)layer;
+  (void)ctx;
+  return 1;
+}
+
+static uint16_t list_num_rows(MenuLayer *layer, uint16_t section, void *ctx) {
+  (void)layer;
+  (void)section;
+  (void)ctx;
+  return (uint16_t)warn_item_count();
+}
+
+static int16_t list_cell_height(MenuLayer *layer, MenuIndex *index, void *ctx) {
+  (void)ctx;
+  int type;
+  const char *title;
+  const char *body;
+  warn_item_at((int)index->row, &type, &title, &body);
+  GRect bounds = layer_get_bounds(menu_layer_get_layer(layer));
+  const int icon_s = PBL_IF_ROUND_ELSE(26, 28);
+  const int pad = PBL_IF_ROUND_ELSE(22, 6);
+  int text_w = bounds.size.w - pad * 2 - icon_s - 10;
+  if (text_w < 72) {
+    text_w = 72;
+  }
+  GSize sz = graphics_text_layout_get_content_size(
+      title, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+      GRect(0, 0, text_w, 200),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  int h = sz.h + 10;
+  if (h < icon_s + 8) {
+    h = icon_s + 8;
+  }
+  return (int16_t)h;
+}
+
+static void list_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *index,
+                          void *callback_context) {
+  (void)callback_context;
+  int type;
+  const char *title;
+  const char *body;
+  warn_item_at((int)index->row, &type, &title, &body);
+  GRect bounds = layer_get_bounds(cell_layer);
+  const int icon_s = PBL_IF_ROUND_ELSE(26, 28);
+  const int pad = PBL_IF_ROUND_ELSE(8, 4);
+  int x = bounds.origin.x + pad;
+  int y = bounds.origin.y + (bounds.size.h - icon_s) / 2;
+  graphics_context_set_text_color(ctx,
+      menu_cell_layer_is_highlighted(cell_layer) ? theme_hi_fg() : theme_fg());
+#ifdef PBL_COLOR
+  warn_icon_draw(ctx, GRect(x, y, icon_s, icon_s), type);
+#else
+  warn_icon_draw_ink(ctx, GRect(x, y, icon_s, icon_s), type,
+                     menu_cell_layer_is_highlighted(cell_layer) ? theme_hi_fg() : theme_fg());
+#endif
+  GRect title_box = GRect(x + icon_s + 6, bounds.origin.y + 4,
+                          bounds.size.w - (x + icon_s + 10), bounds.size.h - 8);
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     title_box, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+}
+
+static int16_t list_header_height(MenuLayer *layer, uint16_t section, void *ctx) {
+  (void)layer;
+  (void)section;
+  (void)ctx;
+  return 24;
+}
+
+static void list_draw_header(GContext *ctx, const Layer *cell_layer, uint16_t section,
+                             void *callback_context) {
+  (void)section;
+  (void)callback_context;
+  GRect bounds = layer_get_bounds(cell_layer);
+  bounds.origin.y += 1;
+  bounds.size.h -= 2;
+  graphics_context_set_text_color(ctx, theme_fg());
+  graphics_draw_text(ctx, "Warnings",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     bounds, GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
+static void apply_list_theme(void) {
+  if (!s_warn_list_menu) {
+    return;
+  }
+  menu_layer_set_normal_colors(s_warn_list_menu, theme_bg(), theme_fg());
+  menu_layer_set_highlight_colors(s_warn_list_menu, theme_hi_bg(), theme_hi_fg());
+}
+
+static void list_select_click(MenuLayer *layer, MenuIndex *index, void *ctx) {
+  (void)layer;
+  (void)ctx;
+  s_warn_focus = (int)index->row;
+  show_warning_at(s_warn_focus);
+}
+
+static void warn_list_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+  s_warn_list_menu = menu_layer_create(bounds);
+  menu_layer_set_callbacks(s_warn_list_menu, NULL, (MenuLayerCallbacks){
+    .get_num_sections = list_num_sections,
+    .get_num_rows = list_num_rows,
+    .get_header_height = list_header_height,
+    .get_cell_height = list_cell_height,
+    .draw_header = list_draw_header,
+    .draw_row = list_draw_row,
+    .select_click = list_select_click,
+    .select_long_click = list_select_click,
+  });
+  menu_layer_set_click_config_onto_window(s_warn_list_menu, window);
+#ifdef PBL_ROUND
+  menu_layer_set_center_focused(s_warn_list_menu, true);
+#endif
+  apply_list_theme();
+  layer_add_child(root, menu_layer_get_layer(s_warn_list_menu));
+}
+
+static void warn_list_unload(Window *window) {
+  (void)window;
+  menu_layer_destroy(s_warn_list_menu);
+  s_warn_list_menu = NULL;
+}
+
+static void show_warn_list(void) {
+  if (!s_warn_list_window) {
+    s_warn_list_window = window_create();
+    window_set_window_handlers(s_warn_list_window, (WindowHandlers){
+      .load = warn_list_load,
+      .unload = warn_list_unload,
+    });
+  }
+  window_set_background_color(s_warn_list_window, theme_bg());
+  window_stack_push(s_warn_list_window, true);
 }
 
 static void toast_hide(void *data) {
@@ -444,6 +640,18 @@ static void warn_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
   s_warn_scroll = scroll_layer_create(bounds);
+#if defined(PBL_PLATFORM_APLITE)
+  const int pad = 6;
+  int inner_w = bounds.size.w - pad * 2;
+  s_warn_text = text_layer_create(GRect(pad, 2, inner_w, bounds.size.h));
+  text_layer_set_font(s_warn_text, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_color(s_warn_text, theme_fg());
+  text_layer_set_background_color(s_warn_text, theme_bg());
+  text_layer_set_overflow_mode(s_warn_text, GTextOverflowModeWordWrap);
+  text_layer_set_text(s_warn_text,
+      g_weather.warn_view_body[0] ? g_weather.warn_view_body : "Loading...");
+  scroll_layer_add_child(s_warn_scroll, text_layer_get_layer(s_warn_text));
+#else
   const int pad = PBL_IF_ROUND_ELSE(18, 8);
   int inner_w = bounds.size.w - pad * 2;
   int content_h = warn_content_height(inner_w);
@@ -457,26 +665,40 @@ static void warn_window_load(Window *window) {
   scroll_layer_set_callbacks(s_warn_scroll, (ScrollLayerCallbacks){
     .content_offset_changed_handler = warn_offset_changed,
   });
+#endif
   scroll_layer_set_click_config_onto_window(s_warn_scroll, window);
   layer_add_child(root, scroll_layer_get_layer(s_warn_scroll));
+#if !defined(PBL_PLATFORM_APLITE)
   s_warn_hint = layer_create(bounds);
   layer_set_update_proc(s_warn_hint, warn_hint_update);
   layer_add_child(root, s_warn_hint);
+#endif
 #if defined(PBL_TOUCH)
   window_set_touch_bridge_disabled(window, true);
   Recognizer *pan = pan_recognizer_create(warn_pan_touch, NULL, PanAxis_Vertical);
   window_attach_recognizer(window, pan);
 #endif
+  warn_relayout();
 }
 
 static void warn_window_unload(Window *window) {
   (void)window;
+#if defined(PBL_PLATFORM_APLITE)
+  text_layer_destroy(s_warn_text);
+  s_warn_text = NULL;
+#else
   layer_destroy(s_warn_hint);
   layer_destroy(s_warn_canvas);
-  scroll_layer_destroy(s_warn_scroll);
   s_warn_hint = NULL;
   s_warn_canvas = NULL;
+#endif
+  scroll_layer_destroy(s_warn_scroll);
   s_warn_scroll = NULL;
+#if defined(PBL_PLATFORM_APLITE)
+  if (s_reopen_warn_list) {
+    show_warn_list();
+  }
+#endif
 }
 
 static void show_warning(void) {
@@ -491,6 +713,24 @@ static void show_warning(void) {
   window_stack_push(s_warn_window, true);
 }
 
+static void show_warning_at(int i) {
+  if (i < 0 || i >= warn_item_count()) {
+    i = 0;
+  }
+  s_warn_focus = i;
+  g_weather.warn_view_index = i;
+  strncpy(g_weather.warn_view_body, "Loading...", sizeof(g_weather.warn_view_body) - 1);
+  g_weather.warn_view_body[sizeof(g_weather.warn_view_body) - 1] = '\0';
+#if defined(PBL_PLATFORM_APLITE)
+  if (s_warn_list_window && window_stack_contains_window(s_warn_list_window)) {
+    window_stack_remove(s_warn_list_window, false);
+  }
+#endif
+  weather_request(REQUEST_WARN_BODY, i);
+  show_warning();
+  warn_relayout();
+}
+
 static void select_click(MenuLayer *layer, MenuIndex *index, void *ctx) {
   (void)layer;
   (void)ctx;
@@ -499,7 +739,7 @@ static void select_click(MenuLayer *layer, MenuIndex *index, void *ctx) {
     return;
   }
   if (is_warn_row(index)) {
-    show_warning();
+    show_warn_list();
     return;
   }
   if (is_now_row(index)) {
@@ -591,9 +831,14 @@ void forecast_menu_init(void) {
 }
 
 void forecast_menu_deinit(void) {
+  s_reopen_warn_list = 0;
   if (s_warn_window) {
     window_destroy(s_warn_window);
     s_warn_window = NULL;
+  }
+  if (s_warn_list_window) {
+    window_destroy(s_warn_list_window);
+    s_warn_list_window = NULL;
   }
   window_destroy(s_window);
 }
@@ -609,14 +854,21 @@ void forecast_menu_reload(void) {
   if (s_warn_window) {
     window_set_background_color(s_warn_window, theme_bg());
   }
+  if (s_warn_list_window) {
+    window_set_background_color(s_warn_list_window, theme_bg());
+  }
   apply_menu_theme();
+  apply_list_theme();
   if (s_menu) {
     menu_layer_reload_data(s_menu);
   }
-  if (s_warn_canvas) {
-    layer_mark_dirty(s_warn_canvas);
+  if (s_warn_list_menu) {
+    menu_layer_reload_data(s_warn_list_menu);
   }
+  warn_relayout();
+#if !defined(PBL_PLATFORM_APLITE)
   if (s_warn_hint) {
     layer_mark_dirty(s_warn_hint);
   }
+#endif
 }

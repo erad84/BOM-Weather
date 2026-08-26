@@ -114,13 +114,23 @@ function cropResizeRgba(src, sw, sh, dw, dh, cropFrac) {
   cropFrac = cropFrac || 0;
   var mx = Math.floor(sw * cropFrac);
   var my = Math.floor(sh * cropFrac);
-  var cw = Math.max(1, sw - mx * 2);
-  var ch = Math.max(1, sh - my * 2);
+  return cropRectResizeRgba(src, sw, sh, mx, my, Math.max(1, sw - mx * 2), Math.max(1, sh - my * 2), dw, dh);
+}
+
+function cropRectResizeRgba(src, sw, sh, x0, y0, cw, ch, dw, dh) {
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x0 >= sw) x0 = sw - 1;
+  if (y0 >= sh) y0 = sh - 1;
+  if (cw < 1) cw = 1;
+  if (ch < 1) ch = 1;
+  if (x0 + cw > sw) cw = sw - x0;
+  if (y0 + ch > sh) ch = sh - y0;
   var dst = new Uint8Array(dw * dh * 4);
   for (var y = 0; y < dh; y++) {
-    var sy = my + Math.min(ch - 1, (y * ch / dh) | 0);
+    var sy = y0 + Math.min(ch - 1, (y * ch / dh) | 0);
     for (var x = 0; x < dw; x++) {
-      var sx = mx + Math.min(cw - 1, (x * cw / dw) | 0);
+      var sx = x0 + Math.min(cw - 1, (x * cw / dw) | 0);
       var si = (sy * sw + sx) * 4;
       var di = (y * dw + x) * 4;
       dst[di] = src[si];
@@ -264,6 +274,7 @@ function encodePng(width, height, rgba, bw) {
 module.exports = {
   resizeRgba: cropResizeRgba,
   cropResizeRgba: cropResizeRgba,
+  cropRectResizeRgba: cropRectResizeRgba,
   extractRect: extractRect,
   fitContainRgba: fitContainRgba,
   composite: composite,

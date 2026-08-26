@@ -1,7 +1,7 @@
 {
   "name": "bom-weather",
   "author": "Mark Williams",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
@@ -47,6 +47,7 @@
       "FdrNow": 18,
       "WarnPacked": 19,
       "Theme": 20,
+      "WarnBody": 21,
       "DayExtended": 90,
       "RadarFrameCount": 100,
       "RadarFrameIndex": 101,

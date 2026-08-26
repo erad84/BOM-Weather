@@ -34,6 +34,18 @@ function coastalOn() {
   return s.CoastalDetails === true || s.CoastalDetails === 1 || s.CoastalDetails === '1';
 }
 
+function payloadInt(p, name) {
+  if (!p) return 0;
+  var v = p[name];
+  if (v == null) {
+    if (name === 'RequestType') v = p['1'] != null ? p['1'] : p[1];
+    else if (name === 'DetailIndex') v = p['6'] != null ? p['6'] : p[6];
+  }
+  if (v && typeof v === 'object' && v.length) v = v[0];
+  var n = parseInt(v, 10);
+  return isFinite(n) ? n : 0;
+}
+
 function themeLight() {
   var s = loadSettings();
   return s.Theme === 'light' || s.Theme === 1 || s.Theme === '1';
@@ -119,6 +131,35 @@ function packDays(days) {
   return lines.join('\n');
 }
 
+function packWarningBodies(warnings, titleMax, bodyMax, packedMax, maxCount) {
+  var n = Math.min(warnings.length, maxCount);
+  var titles = [];
+  var bodies = [];
+  var i;
+  for (i = 0; i < n; i++) {
+    titles.push(clip(bom.cleanWarnTitle(warnings[i].title), titleMax));
+    bodies.push(bodyMax > 0 ? clip(bom.pebbleSafe(warnings[i].body || warnings[i].desc || ''), bodyMax) : '');
+  }
+  function build() {
+    var lines = [];
+    for (i = 0; i < n; i++) {
+      lines.push([warnings[i].type || 'other', titles[i], bodies[i]].join('\t'));
+    }
+    return lines.join('\n');
+  }
+  var packed = build();
+  while (packed.length > packedMax) {
+    var longest = 0;
+    for (i = 1; i < n; i++) {
+      if (bodies[i].length > bodies[longest].length) longest = i;
+    }
+    if (bodies[longest].length <= 80) break;
+    bodies[longest] = clip(bodies[longest], Math.max(80, bodies[longest].length - 80));
+    packed = build();
+  }
+  return packed;
+}
+
 function forecastDict(result) {
   var aplite = isAplite();
   var dict = {
@@ -143,32 +184,23 @@ function forecastDict(result) {
     ].join('\t');
   }
   if (result.warnings && result.warnings.length) {
-    var titleMax = aplite ? 63 : 95;
-    var bodyMax = aplite ? 179 : 419;
-    var packed = [];
-    var i;
-    for (i = 0; i < result.warnings.length && i < (aplite ? 3 : 5); i++) {
-      var w = result.warnings[i];
-      packed.push([
-        w.type || 'other',
-        clip((w.title || '').replace(/\t|\n/g, ' '), titleMax),
-        clip((w.body || '').replace(/\t|\n/g, ' '), bodyMax)
-      ].join('\t'));
-    }
-    dict.WarnPacked = packed.join('\n');
+    var titleMax = aplite ? 119 : 159;
+    var packedMax = aplite ? 500 : 1000;
+    var packed = packWarningBodies(result.warnings, titleMax, 0, packedMax, aplite ? 3 : 5);
+    dict.WarnPacked = packed;
     dict.WarnTitle = result.warnings.length === 1
-      ? clip(result.warnings[0].title.replace(/\t|\n/g, ' '), titleMax)
+      ? clip(bom.cleanWarnTitle(result.warnings[0].title), titleMax)
       : 'Warnings';
-    dict.WarnSub = clip((result.warnings.length === 1
-      ? 'Select for details'
-      : (result.warnings.length + ' current')).replace(/\t|\n/g, ' '), 47);
+    dict.WarnSub = clip(result.warnings.length === 1
+      ? 'Select warning'
+      : (result.warnings.length + ' warnings'), 47);
   } else if (result.warning && result.warning.title) {
-    dict.WarnTitle = clip(result.warning.title.replace(/\t|\n/g, ' '), 95);
-    dict.WarnSub = clip((result.warning.sub || '').replace(/\t|\n/g, ' '), 47);
+    dict.WarnTitle = clip(bom.cleanWarnTitle(result.warning.title), aplite ? 119 : 159);
+    dict.WarnSub = clip(bom.pebbleSafe(result.warning.sub || ''), 47);
     dict.WarnPacked = [
       'other',
       dict.WarnTitle,
-      clip((result.warning.full || '').replace(/\t|\n/g, ' '), 419)
+      ''
     ].join('\t');
   }
   if (result.fdr) dict.FdrNow = clip(String(result.fdr), 15);
@@ -269,7 +301,10 @@ function fetchForecast() {
     }
     localStorage.setItem('bomLastLoc', JSON.stringify(loc));
     sendStatus(1, loc.n);
-    bom.fetchForecast(loc, { coastal: coastalOn() }, function (fetchErr, result) {
+    bom.fetchForecast(loc, {
+      coastal: coastalOn(),
+      skipWarningPages: isAplite()
+    }, function (fetchErr, result) {
       if (fetchErr) {
         console.log('forecast err ' + fetchErr.message);
         if (!sendCachedForecast(loc.n)) {
@@ -284,6 +319,42 @@ function fetchForecast() {
       });
     });
   });
+}
+
+function stripWarnHeading(body, title) {
+  body = bom.pebbleSafe(body || '').replace(/^\s+/, '');
+  title = bom.cleanWarnTitle(title || '');
+  if (title) {
+    var prefix = body.slice(0, title.length);
+    if (prefix.toLowerCase() === title.toLowerCase()) {
+      body = body.slice(title.length).replace(/^[\s:,-]+/, '');
+    }
+  }
+  return body.replace(/^\s+/, '');
+}
+
+function sendWarnBody(index) {
+  var warnings = (lastForecast && lastForecast.warnings) || [];
+  var i = parseInt(index, 10);
+  if (!isFinite(i) || i < 0) i = 0;
+  var w = warnings[i];
+  var max = isAplite() ? 1399 : 3400;
+  function done(text) {
+    var body = stripWarnHeading(text, w && w.title);
+    if (!body) body = 'No details.';
+    send({
+      DetailIndex: i,
+      WarnBody: clip(body, max)
+    });
+  }
+  var have = w ? (w.body || w.desc || '') : '';
+  if (w && w.link && (!have || have.length < 200)) {
+    bom.fetchWarningPage(w.link, function (err, text) {
+      done(text || have);
+    });
+    return;
+  }
+  done(have);
 }
 
 function sendDetail(index) {
@@ -310,6 +381,7 @@ function sendDetail(index) {
 function radarRangeSetting() {
   var r = loadSettings().RadarRange;
   if (r === 'national' || r === 'National') return 'national';
+  if (r === 'state' || r === 'State' || r === 3 || r === '3') return 'state';
   var n = parseInt(r, 10);
   if (n === 64 || n === 256 || n === 512) return n;
   return 128;
@@ -334,7 +406,7 @@ function radarOverlays() {
 }
 
 function radarProductId(siteId, range) {
-  if (range === 'national') return 'IDR00004';
+  if (range === 'national' || range === 'state') return 'IDR00004';
   var digit = '3';
   if (range === 64) digit = '4';
   else if (range === 256) digit = '2';
@@ -345,13 +417,33 @@ function radarProductId(siteId, range) {
 
 function parseRadarRange(hint) {
   if (hint === 1 || hint === '1' || hint === 'national') return 'national';
+  if (hint === 3 || hint === '3' || hint === 'state') return 'state';
   var n = parseInt(hint, 10);
   if (n === 64 || n === 128 || n === 256 || n === 512) return n;
   return radarRangeSetting();
 }
 
 function radarRangeCode(range) {
-  return range === 'national' ? 1 : range;
+  if (range === 'national') return 1;
+  if (range === 'state') return 3;
+  return range;
+}
+
+function stateBounds(state) {
+  var s = String(state || '').toUpperCase();
+  // Geographic extents so the crop contains the whole state, not the town.
+  // ACT uses NSW: the territory is too small for a useful mosaic crop.
+  var boxes = {
+    NSW: { south: -37.51, north: -28.16, west: 140.99, east: 153.64 },
+    ACT: { south: -37.51, north: -28.16, west: 140.99, east: 153.64 },
+    VIC: { south: -39.20, north: -33.98, west: 140.96, east: 149.98 },
+    QLD: { south: -29.18, north: -9.14, west: 137.99, east: 153.55 },
+    SA: { south: -38.13, north: -25.99, west: 129.00, east: 141.00 },
+    WA: { south: -35.13, north: -13.69, west: 112.92, east: 129.00 },
+    TAS: { south: -43.74, north: -39.18, west: 143.74, east: 148.50 },
+    NT: { south: -26.00, north: -10.97, west: 129.00, east: 138.00 }
+  };
+  return boxes[s] || boxes.NSW;
 }
 
 function sendRadar(displayW, displayH, rangeHint) {
@@ -364,9 +456,12 @@ function sendRadar(displayW, displayH, rangeHint) {
   if (size < 120) size = 120;
   var range = parseRadarRange(rangeHint);
   var national = range === 'national';
-  var explicit = rangeHint === 1 || rangeHint === '1' || rangeHint === 64 || rangeHint === 128 ||
-    rangeHint === 256 || rangeHint === 512 || rangeHint === '64' || rangeHint === '128' ||
-    rangeHint === '256' || rangeHint === '512' || rangeHint === 'national';
+  var stateZoom = range === 'state';
+  var mosaic = national || stateZoom;
+  var explicit = rangeHint === 1 || rangeHint === '1' || rangeHint === 3 || rangeHint === '3' ||
+    rangeHint === 64 || rangeHint === 128 || rangeHint === 256 || rangeHint === 512 ||
+    rangeHint === '64' || rangeHint === '128' || rangeHint === '256' || rangeHint === '512' ||
+    rangeHint === 'national' || rangeHint === 'state';
   var rangeCode = radarRangeCode(range);
 
   function stillCurrent() {
@@ -382,29 +477,31 @@ function sendRadar(displayW, displayH, rangeHint) {
 
   function start(loc) {
     var site = loc && loc.id ? loc : (loc ? bom.nearestRadar(loc.lat, loc.lon) : null);
-    if (!national && !site) {
+    if (!mosaic && !site) {
       if (!stillCurrent()) return;
       sendR({ Status: 3, RadarFrameCount: 0 });
       return;
     }
     var townLat = loc && (loc.townLat != null ? loc.townLat : loc.lat);
     var townLon = loc && (loc.townLon != null ? loc.townLon : loc.lon);
-    var productId = national ? 'IDR00004' : radarProductId(site.id, range);
+    var productId = mosaic ? 'IDR00004' : radarProductId(site.id, range);
+    var state = (loc && (loc.s || loc.state)) || (lastForecast && lastForecast.state) || '';
     sendingRadar = true;
     radar.fetchFrames(productId, size, {
       townLat: townLat,
       townLon: townLon,
-      radarLat: national ? -27.0 : (site && site.lat),
-      radarLon: national ? 133.5 : (site && site.lon),
-      rangeKm: national ? 2150 : range,
-      radiusFrac: national ? 0.5 : 0.47,
-      overlays: national ? { locations: radarOverlays().locations } : radarOverlays(),
-      overlayProductId: national ? 'IDE00035' : undefined,
+      radarLat: mosaic ? -27.0 : (site && site.lat),
+      radarLon: mosaic ? 133.5 : (site && site.lon),
+      rangeKm: mosaic ? 2150 : range,
+      radiusFrac: mosaic ? 0.5 : 0.47,
+      overlays: mosaic ? { locations: radarOverlays().locations } : radarOverlays(),
+      overlayProductId: mosaic ? 'IDE00035' : undefined,
       skipCrosshair: !radarOverlays().crosshair,
-      skipFallback: national || explicit,
-      cropFrac: national ? 0.02 : 0.16,
-      intervalMin: national ? 10 : 6,
-      offsetMin: national ? 8 : 0,
+      skipFallback: mosaic || explicit,
+      cropFrac: national ? 0.02 : (stateZoom ? 0 : 0.16),
+      zoomBounds: stateZoom ? stateBounds(state) : undefined,
+      intervalMin: mosaic ? 10 : 6,
+      offsetMin: mosaic ? 8 : 0,
       bw: isBwWatch()
     }, function (err, pngs, usedId) {
       if (!stillCurrent()) return;
@@ -412,7 +509,7 @@ function sendRadar(displayW, displayH, rangeHint) {
         rangeCode = 128;
       }
       if (err || !pngs || !pngs.length) {
-        radar.fetchNotice(productId, national ? 'National radar' : (site && site.n), function (nErr, notice) {
+        radar.fetchNotice(productId, national ? 'National radar' : (stateZoom ? 'State radar' : (site && site.n)), function (nErr, notice) {
           if (!stillCurrent()) return;
           sendingRadar = false;
           console.log('radar err ' + (err && err.message));
@@ -436,7 +533,8 @@ function sendRadar(displayW, displayH, rangeHint) {
       lat: lastForecast.radar.lat,
       lon: lastForecast.radar.lon,
       townLat: lastForecast.lat,
-      townLon: lastForecast.lon
+      townLon: lastForecast.lon,
+      s: lastForecast.state
     });
     return;
   }
@@ -566,13 +664,16 @@ Pebble.addEventListener('ready', function () {
 
 Pebble.addEventListener('appmessage', function (e) {
   var p = e.payload || {};
-  var type = p.RequestType;
+  var type = payloadInt(p, 'RequestType');
+  console.log('appmessage type=' + type + ' keys=' + Object.keys(p).join(','));
   if (type === 1) {
-    sendDetail(p.DetailIndex || 0);
+    sendDetail(payloadInt(p, 'DetailIndex'));
   } else if (type === 2) {
     sendRadar(p.DisplayW, p.DisplayH, p.DetailIndex);
   } else if (type === 3) {
     sendSynoptic(p.DisplayW, p.DisplayH);
+  } else if (type === 5) {
+    sendWarnBody(payloadInt(p, 'DetailIndex'));
   } else {
     fetchForecast();
   }

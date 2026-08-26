@@ -347,29 +347,105 @@ function fetchOne(path, cb) {
   });
 }
 
+function mosaicPx(opts, sw, sh, lat, lon) {
+  var rangeKm = opts.rangeKm || 128;
+  var kmN = (lat - opts.radarLat) * 111.32;
+  var kmE = (lon - opts.radarLon) * 111.32 *
+    Math.cos(opts.radarLat * Math.PI / 180);
+  var radiusFrac = opts.radiusFrac != null ? opts.radiusFrac : 0.47;
+  var radiusPx = Math.min(sw, sh) * radiusFrac;
+  var pxPerKm = radiusPx / rangeKm;
+  return {
+    x: sw / 2 + kmE * pxPerKm,
+    y: sh / 2 - kmN * pxPerKm
+  };
+}
+
 function hasCoords(lat, lon) {
   return typeof lat === 'number' && typeof lon === 'number' &&
     isFinite(lat) && isFinite(lon) && !(lat === 0 && lon === 0);
 }
 
-function townToPixel(opts, sw, sh, dw, dh, cropFrac) {
-  var rangeKm = opts.rangeKm || 128;
-  var kmN = (opts.townLat - opts.radarLat) * 111.32;
-  var kmE = (opts.townLon - opts.radarLon) * 111.32 *
-    Math.cos(opts.radarLat * Math.PI / 180);
-  var radiusFrac = opts.radiusFrac != null ? opts.radiusFrac : 0.47;
-  var radiusPx = Math.min(sw, sh) * radiusFrac;
-  var pxPerKm = radiusPx / rangeKm;
-  var sx = sw / 2 + kmE * pxPerKm;
-  var sy = sh / 2 - kmN * pxPerKm;
-  var mx = Math.floor(sw * cropFrac);
-  var my = Math.floor(sh * cropFrac);
-  var cw = Math.max(1, sw - mx * 2);
-  var ch = Math.max(1, sh - my * 2);
-  var x = (sx - mx) / cw * dw;
-  var y = (sy - my) / ch * dh;
+function townToPixel(opts, sw, sh, dw, dh, crop) {
+  var p = mosaicPx(opts, sw, sh, opts.townLat, opts.townLon);
+  var mx;
+  var my;
+  var cw;
+  var ch;
+  if (crop && crop.w) {
+    mx = crop.x;
+    my = crop.y;
+    cw = crop.w;
+    ch = crop.h;
+  } else {
+    var cropFrac = (typeof crop === 'number') ? crop : 0;
+    mx = Math.floor(sw * cropFrac);
+    my = Math.floor(sh * cropFrac);
+    cw = Math.max(1, sw - mx * 2);
+    ch = Math.max(1, sh - my * 2);
+  }
+  var x = (p.x - mx) / cw * dw;
+  var y = (p.y - my) / ch * dh;
   if (x < 4 || y < 4 || x > dw - 5 || y > dh - 5) return null;
   return { x: x, y: y };
+}
+
+function boundsBox(opts, sw, sh, b) {
+  var pts = [
+    mosaicPx(opts, sw, sh, b.south, b.west),
+    mosaicPx(opts, sw, sh, b.south, b.east),
+    mosaicPx(opts, sw, sh, b.north, b.west),
+    mosaicPx(opts, sw, sh, b.north, b.east)
+  ];
+  var minX = Math.min(pts[0].x, pts[1].x, pts[2].x, pts[3].x);
+  var maxX = Math.max(pts[0].x, pts[1].x, pts[2].x, pts[3].x);
+  var minY = Math.min(pts[0].y, pts[1].y, pts[2].y, pts[3].y);
+  var maxY = Math.max(pts[0].y, pts[1].y, pts[2].y, pts[3].y);
+  var pad = Math.max(maxX - minX, maxY - minY) * 0.08;
+  minX -= pad;
+  maxX += pad;
+  minY -= pad;
+  maxY += pad;
+  var cx = (minX + maxX) / 2;
+  var cy = (minY + maxY) / 2;
+  var side = Math.max(maxX - minX, maxY - minY, 8);
+  if (side > sw) side = sw;
+  if (side > sh) side = sh;
+  var x0 = Math.round(cx - side / 2);
+  var y0 = Math.round(cy - side / 2);
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x0 + side > sw) x0 = sw - side;
+  if (y0 + side > sh) y0 = sh - side;
+  return { x: x0, y: y0, w: Math.round(side), h: Math.round(side) };
+}
+
+function zoomBox(opts, sw, sh) {
+  if (opts.zoomBounds) {
+    return boundsBox(opts, sw, sh, opts.zoomBounds);
+  }
+  var rangeKm = opts.rangeKm || 2150;
+  var radiusFrac = opts.radiusFrac != null ? opts.radiusFrac : 0.5;
+  var radiusPx = Math.min(sw, sh) * radiusFrac;
+  var pxPerKm = radiusPx / rangeKm;
+  var zoomKm = opts.zoomKm || 1100;
+  var size = Math.max(8, Math.round(zoomKm * 2 * pxPerKm));
+  var cx = sw / 2;
+  var cy = sh / 2;
+  if (hasCoords(opts.townLat, opts.townLon) && hasCoords(opts.radarLat, opts.radarLon)) {
+    var p = mosaicPx(opts, sw, sh, opts.townLat, opts.townLon);
+    cx = p.x;
+    cy = p.y;
+  }
+  if (size > sw) size = sw;
+  if (size > sh) size = sh;
+  var x0 = Math.round(cx - size / 2);
+  var y0 = Math.round(cy - size / 2);
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x0 + size > sw) x0 = sw - size;
+  if (y0 + size > sh) y0 = sh - size;
+  return { x: x0, y: y0, w: size, h: size };
 }
 
 function fetchFramesFor(productId, size, opts, cb) {
@@ -465,9 +541,12 @@ function fetchFramesFor(productId, size, opts, cb) {
           if (bgUse && (bw !== w || bh !== h)) bgUse = null;
           var composed = pngutil.composite(bgUse, rain.rgba, rain.rgba.length);
           var dw = Math.max(120, Math.min(size, 200));
-          var resized = pngutil.cropResizeRgba(composed, w, h, dw, dw, cropFrac);
+          var cropRect = (opts.zoomBounds || opts.zoomKm) ? zoomBox(opts, w, h) : null;
+          var resized = cropRect
+            ? pngutil.cropRectResizeRgba(composed, w, h, cropRect.x, cropRect.y, cropRect.w, cropRect.h, dw, dw)
+            : pngutil.cropResizeRgba(composed, w, h, dw, dw, cropFrac);
           if (!opts.skipCrosshair && opts && hasCoords(opts.townLat, opts.townLon) && hasCoords(opts.radarLat, opts.radarLon)) {
-            var mark = townToPixel(opts, w, h, dw, dw, cropFrac);
+            var mark = townToPixel(opts, w, h, dw, dw, cropRect || cropFrac);
             if (mark) pngutil.drawCrosshair(resized, dw, dw, mark.x, mark.y);
           }
           var png = pngutil.encodePng(dw, dw, resized, opts.bw);
@@ -519,6 +598,8 @@ function copyOpts(opts, extra) {
     skipBackground: opts.skipBackground,
     skipCrosshair: opts.skipCrosshair,
     cropFrac: opts.cropFrac,
+    zoomKm: opts.zoomKm,
+    zoomBounds: opts.zoomBounds,
     intervalMin: opts.intervalMin,
     offsetMin: opts.offsetMin,
     bw: opts.bw
@@ -575,6 +656,10 @@ function fetchFrames(productId, size, opts, cb) {
   fetchFramesFor(productId, size, opts, function (err, pngs) {
     if (!err && pngs && pngs.length) {
       cb(null, pngs, productId);
+      return;
+    }
+    if (opts.zoomKm || opts.zoomBounds || productId === 'IDR00004') {
+      cb(err || new Error('no frames'), null, productId);
       return;
     }
     var alts = nearbyRangeProducts(productId, opts.townLat || opts.radarLat, opts.townLon || opts.radarLon);

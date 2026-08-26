@@ -147,12 +147,11 @@ static int page_kind(void) {
 
 static const char *coastal_text(void) {
   if (s_index == DETAIL_CURRENT) {
-    return (g_weather.day_count > 0 && g_weather.days[0].coastal[0])
-               ? g_weather.days[0].coastal
-               : "";
+    const char *text = weather_coastal(0);
+    return (g_weather.day_count > 0 && text[0]) ? text : "";
   }
   if (s_index >= 0 && s_index < g_weather.day_count) {
-    return g_weather.days[s_index].coastal;
+    return weather_coastal(s_index);
   }
   return "";
 }
@@ -310,7 +309,7 @@ static void rebuild_lines(void) {
 
   DayForecast *d = &g_weather.days[s_index];
   if (page_kind() == KIND_EXTRA) {
-    set_wrap(d->extended[0] ? d->extended : d->precis);
+    set_wrap(weather_extended(s_index)[0] ? weather_extended(s_index) : d->precis);
     return;
   }
 
@@ -564,10 +563,19 @@ static void request_day_detail(int index) {
   if (index < 0 || index >= g_weather.day_count) {
     return;
   }
+#if defined(PBL_PLATFORM_APLITE)
+  if (g_weather.view_detail_index == index && weather_extended(index)[0] &&
+      (!coastal_on() || weather_coastal(index)[0])) {
+    return;
+  }
+#else
   DayForecast *d = &g_weather.days[index];
   if (!d->extended[0] || (coastal_on() && !d->coastal[0])) {
+#endif
     weather_request(REQUEST_DETAIL, index);
+#if !defined(PBL_PLATFORM_APLITE)
   }
+#endif
 }
 
 static void load_day(int index) {

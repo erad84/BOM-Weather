@@ -11,23 +11,29 @@
 #if defined(PBL_PLATFORM_APLITE)
 #define MAX_EXTENDED 220
 #define MAX_COASTAL 240
+#define MAX_DAY_EXTENDED 1
+#define MAX_DAY_COASTAL 1
 #else
 #define MAX_EXTENDED 300
 #define MAX_COASTAL 300
+#define MAX_DAY_EXTENDED MAX_EXTENDED
+#define MAX_DAY_COASTAL MAX_COASTAL
 #endif
 #define MAX_LOCATION 32
 #define MAX_STATUS 40
 #if defined(PBL_PLATFORM_APLITE)
-#define MAX_WARN_TITLE 64
+#define MAX_WARN_TITLE 120
 #define MAX_WARN_SUB 48
 #define MAX_WARN_FULL 8
-#define MAX_WARN_BODY 180
+#define MAX_WARN_BODY 1
+#define MAX_WARN_VIEW 1400
 #define MAX_WARNINGS 3
 #else
-#define MAX_WARN_TITLE 96
+#define MAX_WARN_TITLE 160
 #define MAX_WARN_SUB 48
 #define MAX_WARN_FULL 8
-#define MAX_WARN_BODY 420
+#define MAX_WARN_BODY 1
+#define MAX_WARN_VIEW 3600
 #define MAX_WARNINGS 5
 #endif
 #define MAX_NOTICE 240
@@ -40,8 +46,10 @@
 #define REQUEST_DETAIL 1
 #define REQUEST_RADAR 2
 #define REQUEST_SYNOPTIC 3
+#define REQUEST_WARN_BODY 5
 #define DETAIL_CURRENT -1
 #define RANGE_SYNOPTIC 2
+#define RANGE_STATE 3
 
 #define WARN_FIRE 1
 #define WARN_FLOOD 2
@@ -79,8 +87,8 @@ typedef struct {
   char rain_amount[MAX_RAIN];
   char uv[MAX_UV];
   char fdr[MAX_FDR];
-  char extended[MAX_EXTENDED];
-  char coastal[MAX_COASTAL];
+  char extended[MAX_DAY_EXTENDED];
+  char coastal[MAX_DAY_COASTAL];
   int icon;
 } DayForecast;
 
@@ -121,6 +129,14 @@ typedef struct {
   char warn_sub[MAX_WARN_SUB];
   char warn_full[MAX_WARN_FULL];
   WarningItem warnings[MAX_WARNINGS];
+#if defined(PBL_PLATFORM_APLITE)
+  char view_extended[MAX_EXTENDED];
+  char view_coastal[MAX_COASTAL];
+  char coastal_now[MAX_COASTAL];
+  int view_detail_index;
+#endif
+  char warn_view_body[MAX_WARN_VIEW];
+  int warn_view_index;
   int warn_count;
   int has_warn;
   int has_coastal;
@@ -131,6 +147,36 @@ typedef struct {
 } WeatherState;
 
 extern WeatherState g_weather;
+
+#if defined(PBL_PLATFORM_APLITE)
+static inline char *weather_extended(int i) {
+  (void)i;
+  return g_weather.view_extended;
+}
+static inline size_t weather_extended_size(int i) {
+  (void)i;
+  return sizeof(g_weather.view_extended);
+}
+static inline char *weather_coastal(int i) {
+  return (i <= 0) ? g_weather.coastal_now : g_weather.view_coastal;
+}
+static inline size_t weather_coastal_size(int i) {
+  return (i <= 0) ? sizeof(g_weather.coastal_now) : sizeof(g_weather.view_coastal);
+}
+#else
+static inline char *weather_extended(int i) {
+  return g_weather.days[i].extended;
+}
+static inline size_t weather_extended_size(int i) {
+  return sizeof(g_weather.days[i].extended);
+}
+static inline char *weather_coastal(int i) {
+  return g_weather.days[i].coastal;
+}
+static inline size_t weather_coastal_size(int i) {
+  return sizeof(g_weather.days[i].coastal);
+}
+#endif
 
 void forecast_menu_init(void);
 void forecast_menu_deinit(void);

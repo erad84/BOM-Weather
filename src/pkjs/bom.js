@@ -50,11 +50,49 @@ var UV_AREA_ALIASES = {
 
 function decodeXml(s) {
   if (!s) return '';
-  return s.replace(/&amp;/g, '&')
+  return s.replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, function (_, h) {
+      return String.fromCharCode(parseInt(h, 16));
+    })
+    .replace(/&#(\d+);/g, function (_, n) {
+      return String.fromCharCode(+n);
+    });
+}
+
+function collapseSpace(s) {
+  return String(s || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+}
+
+function pebbleSafe(s) {
+  s = decodeXml(String(s || ''));
+  s = s.replace(/[\u00a0\u202f]/g, ' ');
+  s = s.replace(/[\u2018\u2019\u2032]/g, "'");
+  s = s.replace(/[\u201c\u201d]/g, '"');
+  s = s.replace(/[\u2013\u2014\u2212]/g, '-');
+  s = s.replace(/\u2026/g, '...');
+  var out = '';
+  var i;
+  for (i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c === 9 || c === 10 || c === 13 || (c >= 32 && c <= 255)) {
+      out += s.charAt(i);
+    } else {
+      out += ' ';
+    }
+  }
+  return collapseSpace(out);
+}
+
+function cleanWarnTitle(title) {
+  title = pebbleSafe(title);
+  title = title.replace(/^\d{1,2}\/\d{1,2}:\d{2}(?::\d{2})?\s+[A-Z]{2,5}\s+/i, '');
+  return title;
 }
 
 function xhrOk(req, minLen) {
@@ -814,17 +852,29 @@ function stripTags(s) {
   return String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
 }
 
+function rssTagText(block, tag) {
+  var cdata = block.match(new RegExp('<' + tag + '[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>', 'i'));
+  if (cdata) return cdata[1];
+  var plain = block.match(new RegExp('<' + tag + '[^>]*>([^<]*)</' + tag + '>', 'i'));
+  return plain ? plain[1] : '';
+}
+
+function rssHref(block, tag) {
+  var href = block.match(new RegExp('<' + tag + '[^>]*href=["\\\']([^"\\\']+)["\\\']', 'i'));
+  return href ? href[1] : '';
+}
+
 function parseWarningItems(xml) {
   var items = [];
   if (!xml) return items;
   var parts = xml.split('<item>');
   for (var i = 1; i < parts.length; i++) {
     var body = parts[i].split('</item>')[0];
-    var title = (body.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
-    var desc = (body.match(/<description>([\s\S]*?)<\/description>/) || [])[1] || '';
-    var link = (body.match(/<link>([^<]*)<\/link>/) || [])[1] || '';
+    var title = rssTagText(body, 'title');
+    var desc = rssTagText(body, 'description');
+    var link = rssTagText(body, 'link') || rssHref(body, 'link') || rssTagText(body, 'guid');
     desc = stripTags(decodeXml(desc.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')));
-    title = decodeXml(title);
+    title = cleanWarnTitle(title);
     link = decodeXml(link).replace(/^\s+|\s+$/g, '');
     if (!title) continue;
     if (/cancel|finalising|no longer current|expired/i.test(title + ' ' + desc)) continue;
@@ -841,23 +891,16 @@ function htmlToText(html) {
   return stripTags(decodeXml(s));
 }
 
-function extractProductText(html) {
-  var s = String(html || '');
-  var start = s.search(/<div[^>]*class="[^"]*\bproduct\b[^"]*"/i);
-  if (start < 0) {
-    start = s.search(/id="content"/i);
-  }
-  if (start < 0) {
-    return htmlToText(s);
-  }
-  var i = s.indexOf('>', start) + 1;
+function sliceDivInner(html, start) {
+  var i = html.indexOf('>', start) + 1;
+  if (i < 1) return '';
   var depth = 1;
   var j = i;
-  while (j < s.length && depth > 0) {
-    var open = s.indexOf('<div', j);
-    var close = s.indexOf('</div>', j);
+  while (j < html.length && depth > 0) {
+    var open = html.indexOf('<div', j);
+    var close = html.indexOf('</div>', j);
     if (close < 0) {
-      break;
+      return html.slice(i, i + 20000);
     }
     if (open >= 0 && open < close) {
       depth++;
@@ -865,21 +908,41 @@ function extractProductText(html) {
     } else {
       depth--;
       if (depth === 0) {
-        return htmlToText(s.slice(i, close));
+        return html.slice(i, close);
       }
       j = close + 6;
     }
   }
-  return htmlToText(s.slice(i, i + 12000));
+  return html.slice(i, i + 20000);
+}
+
+function extractProductText(html) {
+  var s = String(html || '').replace(/<img[\s\S]*?>/gi, ' ');
+  var start = s.search(/<div[^>]*id="main"[^>]*>/i);
+  if (start < 0) {
+    start = s.search(/<div[^>]*class="[^"]*\bproduct\b[^"]*"/i);
+  }
+  if (start < 0) {
+    start = s.search(/id="content"/i);
+  }
+  var chunk = start >= 0 ? sliceDivInner(s, start) : s;
+  var text = pebbleSafe(htmlToText(chunk));
+  text = text.replace(/^Warnings Information\b[\s\S]*?(?=ID[A-Z]{1,3}\d{5}\b|TOP PRIORITY|IMMEDIATE BROADCAST|Severe |Cancellation |Flood |Fire |Tsunami |Marine |Tropical )/i, '');
+  text = text.replace(/^ID[A-Z]{1,3}\d{5}\s*/i, '');
+  text = text.replace(/^Australian Government Bureau of Meteorology\s*/i, '');
+  text = text.replace(/^TOP PRIORITY FOR IMMEDIATE BROADCAST\s*/i, '');
+  text = text.replace(/^IMMEDIATE BROADCAST\s*/i, '');
+  return text;
 }
 
 function warningPageUrls(link) {
   var raw = String(link || '').replace(/^\s+|\s+$/g, '');
   if (!raw) return [];
+  if (raw.charAt(0) === '/') raw = 'https://www.bom.gov.au' + raw;
   var https = raw.replace(/^http:\/\//i, 'https://');
   var urls = [];
   function isBom(u) {
-    return /^https:\/\/(www|reg)\.bom\.gov\.au\//i.test(u);
+    return /^https:\/\/([\w-]+\.)?bom\.gov\.au\//i.test(u);
   }
   function add(u) {
     if (u && isBom(u) && urls.indexOf(u) < 0) urls.push(u);
@@ -959,7 +1022,11 @@ function warningMatches(item, loc, district) {
   return false;
 }
 
-function fetchTownWarnings(loc, forecastXml, includeCoastal, cb) {
+function fetchTownWarnings(loc, forecastXml, includeCoastal, skipPages, cb) {
+  if (typeof skipPages === 'function') {
+    cb = skipPages;
+    skipPages = false;
+  }
   var feed = WARN_FEEDS[loc && loc.s] || WARN_FEEDS.NSW;
   var district = districtName(forecastXml, loc && loc.aac);
   xhrTextFallback(feed, function (err, xml) {
@@ -970,7 +1037,7 @@ function fetchTownWarnings(loc, forecastXml, includeCoastal, cb) {
     var i;
     for (i = 0; i < items.length; i++) {
       if (!warningMatches(items[i], loc, district)) continue;
-      var title = items[i].title.replace(/^\d{1,2}\/\d{1,2}:\d{2}\s+\w+\s+/, '');
+      var title = cleanWarnTitle(items[i].title);
       if (!includeCoastal && isCoastalWarning(title, items[i].desc)) continue;
       var type = warningType(title, items[i].desc);
       var key = type + '|' + title;
@@ -989,16 +1056,29 @@ function fetchTownWarnings(loc, forecastXml, includeCoastal, cb) {
       cb(null, []);
       return;
     }
+    if (skipPages) {
+      cb(null, matched.map(function (item) {
+        return {
+          type: item.type,
+          title: item.title,
+          sub: item.sub,
+          body: '',
+          link: item.link
+        };
+      }));
+      return;
+    }
     var left = matched.length;
     var out = new Array(matched.length);
     matched.forEach(function (item, idx) {
       fetchWarningPage(item.link, function (pageErr, text) {
-        var body = (text || item.desc || '').replace(/\s+/g, ' ');
+        var body = pebbleSafe(text || item.desc || '');
         out[idx] = {
           type: item.type,
           title: item.title,
           sub: item.sub,
-          body: body
+          body: body,
+          link: item.link
         };
         left--;
         if (left === 0) cb(null, out);
@@ -1242,7 +1322,7 @@ function fetchForecast(loc, opts, cb) {
         extras.obs = obs || null;
         one();
       });
-      fetchTownWarnings(loc, xml, !!opts.coastal, function (wErr, warnings) {
+      fetchTownWarnings(loc, xml, !!opts.coastal, !!opts.skipWarningPages, function (wErr, warnings) {
         extras.warnings = warnings || [];
         one();
       });
@@ -1296,5 +1376,9 @@ module.exports = {
   getTowns: getTowns,
   loadSavedTowns: loadSavedTowns,
   fetchTownList: fetchTownList,
-  fetchForecast: fetchForecast
+  fetchForecast: fetchForecast,
+  pebbleSafe: pebbleSafe,
+  cleanWarnTitle: cleanWarnTitle,
+  warningPageUrls: warningPageUrls,
+  fetchWarningPage: fetchWarningPage
 };

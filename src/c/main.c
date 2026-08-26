@@ -10,6 +10,10 @@ static void copy_tuple_str(char *dest, size_t dest_size, Tuple *t) {
   if (!t || t->type != TUPLE_CSTRING) {
     return;
   }
+  if (dest_size <= 1) {
+    if (dest && dest_size) dest[0] = '\0';
+    return;
+  }
   strncpy(dest, t->value->cstring, dest_size - 1);
   dest[dest_size - 1] = '\0';
 }
@@ -34,7 +38,7 @@ static void copy_str(char *dst, size_t dst_size, const char *src) {
   if (!dst || dst_size == 0) {
     return;
   }
-  if (!src) {
+  if (!src || dst_size == 1) {
     dst[0] = '\0';
     return;
   }
@@ -132,6 +136,12 @@ static void apply_packed_days(const char *packed) {
     }
     line = *line_end ? line_end + 1 : line_end;
   }
+#if defined(PBL_PLATFORM_APLITE)
+  g_weather.view_extended[0] = '\0';
+  g_weather.view_coastal[0] = '\0';
+  g_weather.coastal_now[0] = '\0';
+  g_weather.view_detail_index = -1;
+#endif
 }
 
 static int warn_type_from_name(const char *name) {
@@ -510,6 +520,17 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     day_detail_reload();
   }
 
+  Tuple *warn_body = dict_find(iter, MESSAGE_KEY_WarnBody);
+  if (warn_body && warn_body->type == TUPLE_CSTRING) {
+    Tuple *di = dict_find(iter, MESSAGE_KEY_DetailIndex);
+    int idx = di ? (int)tuple_int(di, 0) : g_weather.warn_view_index;
+    if (idx == g_weather.warn_view_index) {
+      copy_tuple_str(g_weather.warn_view_body, sizeof(g_weather.warn_view_body), warn_body);
+    }
+    forecast_menu_reload();
+    return;
+  }
+
   Tuple *coast_now = dict_find(iter, MESSAGE_KEY_CoastalNow);
   Tuple *packed = dict_find(iter, MESSAGE_KEY_DaysPacked);
   if (packed && packed->type == TUPLE_CSTRING && packed->length > 1) {
@@ -518,8 +539,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       g_weather.has_coastal = 0;
     }
     if (coast_now) {
-      copy_tuple_str(g_weather.days[0].coastal, sizeof(g_weather.days[0].coastal),
-                     coast_now);
+      copy_tuple_str(weather_coastal(0), weather_coastal_size(0), coast_now);
     }
     if (!cond1 && !cond2) {
       g_weather.has_now = 0;
@@ -555,13 +575,14 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     int index = (int)tuple_int(detail_t, 0);
     if (index >= 0 && index < MAX_DAYS) {
       if (ext0) {
-        copy_tuple_str(g_weather.days[index].extended,
-                       sizeof(g_weather.days[index].extended), ext0);
+        copy_tuple_str(weather_extended(index), weather_extended_size(index), ext0);
       }
       if (coast0) {
-        copy_tuple_str(g_weather.days[index].coastal,
-                       sizeof(g_weather.days[index].coastal), coast0);
+        copy_tuple_str(weather_coastal(index), weather_coastal_size(index), coast0);
       }
+#if defined(PBL_PLATFORM_APLITE)
+      g_weather.view_detail_index = index;
+#endif
       day_detail_reload();
     }
   }
@@ -582,6 +603,9 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, voi
 
 static void init(void) {
   memset(&g_weather, 0, sizeof(g_weather));
+#if defined(PBL_PLATFORM_APLITE)
+  g_weather.view_detail_index = -1;
+#endif
   apply_status(STATUS_LOADING);
   theme_init();
   persist_load();

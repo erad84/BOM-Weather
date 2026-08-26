@@ -21,10 +21,10 @@ void radar_handle_dict(DictionaryIterator *iter) {
 #define RADAR_FRAME_MS 550
 #define RADAR_LOOP_PAUSE_MS 2000
 #define SYNOPTIC_FRAME_MS 1300
-#define RANGE_COUNT 5
+#define RANGE_COUNT 6
 #define RANGE_NATIONAL 1
 
-static const int k_ranges[RANGE_COUNT] = {64, 128, 256, 512, RANGE_NATIONAL};
+static const int k_ranges[RANGE_COUNT] = {64, 128, 256, 512, RANGE_STATE, RANGE_NATIONAL};
 
 static Window *s_window;
 static BitmapLayer *s_bitmap_layer;
@@ -118,6 +118,8 @@ static void set_header_from_code(int code) {
     snprintf(s_header_text, sizeof(s_header_text), "4-day Synoptic");
   } else if (code == RANGE_NATIONAL) {
     snprintf(s_header_text, sizeof(s_header_text), "National Rain Radar");
+  } else if (code == RANGE_STATE) {
+    snprintf(s_header_text, sizeof(s_header_text), "State Rain Radar");
   } else if (code == 64 || code == 128 || code == 256 || code == 512) {
     snprintf(s_header_text, sizeof(s_header_text), "%d km Rain Radar", code);
   } else {

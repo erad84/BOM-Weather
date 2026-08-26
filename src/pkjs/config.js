@@ -14,7 +14,7 @@ function toUrl(settings, extras) {
   var autoNow = extras.autoLocation || 'Not detected yet';
   var refreshStatus = extras.refreshStatus || ((extras.townCount || 0) + ' towns');
   var range = String(settings.RadarRange == null ? '128' : settings.RadarRange);
-  if (['64', '128', '256', '512', 'national'].indexOf(range) === -1) range = '128';
+  if (['64', '128', '256', '512', 'state', 'national'].indexOf(range) === -1) range = '128';
   var theme = (settings.Theme === 'light' || settings.Theme === 1 || settings.Theme === '1') ? 'light' : 'dark';
   function rangeOpt(v, label) {
     return '<option value="' + v + '"' + (range === String(v) ? ' selected' : '') + '>' + label + '</option>';
@@ -82,6 +82,7 @@ function toUrl(settings, extras) {
     rangeOpt(128, '128 km') +
     rangeOpt(256, '256 km') +
     rangeOpt(512, '512 km') +
+    rangeOpt('state', 'State') +
     rangeOpt('national', 'National') +
     '</select>' +
     '<p>Used when you open rain radar. Change range on the watch with up and down.</p>' +
