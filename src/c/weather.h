@@ -48,6 +48,12 @@
 #define REQUEST_SYNOPTIC 3
 #define REQUEST_WARN_BODY 5
 #define DETAIL_CURRENT -1
+#define NOW_CALC_HUM 1
+#define NOW_CALC_DELTA 2
+#define NOW_CALC_APPARENT 4
+#define NOW_CALC_DEW 8
+#define NOW_CALC_MSL_NEAR 16
+#define NOW_CALC_MSL_INTERP 32
 #define RANGE_SYNOPTIC 2
 #define RANGE_STATE 3
 
@@ -110,7 +116,7 @@ typedef struct {
   int now_hum;
   int now_delta;
   int now_apparent;
-  int now_msl;
+  int now_msl; /* tenths of hPa */
   int now_wind_kmh;
   int now_gust;
   int now_dew;
@@ -124,6 +130,7 @@ typedef struct {
   int has_now_gust;
   int has_now_dew;
   int has_now_rain;
+  int now_calc_flags;
   int has_now;
   char warn_title[MAX_WARN_TITLE];
   char warn_sub[MAX_WARN_SUB];

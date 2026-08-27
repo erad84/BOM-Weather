@@ -63,6 +63,22 @@ static int span_int(const char *src, size_t len) {
   return atoi(tmp);
 }
 
+static int parse_tenths(const char *s) {
+  if (!s || !s[0]) {
+    return 0;
+  }
+  int whole = atoi(s);
+  const char *dot = strchr(s, '.');
+  int tenth = 0;
+  if (dot && dot[1] >= '0' && dot[1] <= '9') {
+    tenth = dot[1] - '0';
+  }
+  if (whole < 0) {
+    return whole * 10 - tenth;
+  }
+  return whole * 10 + tenth;
+}
+
 static void apply_packed_days(const char *packed) {
   if (!packed || !packed[0]) {
     return;
@@ -389,6 +405,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     g_weather.has_now_gust = 0;
     g_weather.has_now_dew = 0;
     g_weather.has_now_rain = 0;
+    g_weather.now_calc_flags = 0;
     g_weather.cond_wind[0] = '\0';
     g_weather.now_wind_dir[0] = '\0';
     g_weather.has_now = 0;
@@ -398,19 +415,19 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       g_weather.has_now = 1;
     }
     if (cond2 && cond2->type == TUPLE_CSTRING) {
-      char buf[128];
+      char buf[160];
       strncpy(buf, cond2->value->cstring, sizeof(buf) - 1);
       buf[sizeof(buf) - 1] = '\0';
-      char *fields[10];
+      char *fields[11];
       int n = 0;
       fields[n++] = buf;
-      for (char *c = buf; *c && n < 10; c++) {
+      for (char *c = buf; *c && n < 11; c++) {
         if (*c == '\t') {
           *c = '\0';
           fields[n++] = c + 1;
         }
       }
-      while (n < 10) {
+      while (n < 11) {
         fields[n++] = "";
       }
       if (fields[0][0]) {
@@ -434,7 +451,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         g_weather.has_now = 1;
       }
       if (fields[4][0]) {
-        g_weather.now_msl = atoi(fields[4]);
+        g_weather.now_msl = parse_tenths(fields[4]);
         g_weather.has_now_msl = 1;
         g_weather.has_now = 1;
       }
@@ -458,6 +475,9 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         strncpy(g_weather.now_rain, fields[9], sizeof(g_weather.now_rain) - 1);
         g_weather.now_rain[sizeof(g_weather.now_rain) - 1] = '\0';
         g_weather.has_now_rain = 1;
+      }
+      if (fields[10][0]) {
+        g_weather.now_calc_flags = atoi(fields[10]);
       }
     }
   }
@@ -552,6 +572,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       g_weather.has_now_gust = 0;
       g_weather.has_now_dew = 0;
       g_weather.has_now_rain = 0;
+      g_weather.now_calc_flags = 0;
       g_weather.cond_wind[0] = '\0';
       g_weather.now_wind_dir[0] = '\0';
       g_weather.now_rain[0] = '\0';

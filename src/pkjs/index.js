@@ -175,12 +175,13 @@ function forecastDict(result) {
       result.obs.deltaT != null ? String(result.obs.deltaT) : '',
       clip(result.obs.wind || '', 31),
       result.obs.apparent != null ? String(result.obs.apparent) : '',
-      result.obs.msl != null ? String(result.obs.msl) : '',
+      result.obs.msl != null ? (Math.round(result.obs.msl * 10) / 10).toFixed(1) : '',
       clip(result.obs.windDir || '', 7),
       result.obs.windKmh != null ? String(result.obs.windKmh) : '',
       result.obs.gust != null ? String(result.obs.gust) : '',
       result.obs.dew != null ? String(result.obs.dew) : '',
-      clip(result.obs.rain || '', 11)
+      clip(result.obs.rain || '', 11),
+      String(bom.obsCalcMask(result.obs) || '')
     ].join('\t');
   }
   if (result.warnings && result.warnings.length) {
@@ -646,15 +647,94 @@ function watchPlatform() {
   }
 }
 
+function configLocation() {
+  function withCoords(loc) {
+    if (!loc) return null;
+    var lat = parseFloat(loc.lat != null ? loc.lat : loc.townLat);
+    var lon = parseFloat(loc.lon != null ? loc.lon : loc.townLon);
+    if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) {
+      var named = bom.findTown(loc.n || loc.location || '');
+      return named && named.lat ? named : null;
+    }
+    loc.lat = lat;
+    loc.lon = lon;
+    return loc;
+  }
+  if (lastForecast && lastForecast.location) {
+    var fromForecast = withCoords({
+      n: lastForecast.location,
+      s: lastForecast.state,
+      lat: lastForecast.lat,
+      lon: lastForecast.lon
+    });
+    if (fromForecast) return fromForecast;
+  }
+  return withCoords(loadLastLoc());
+}
+
+function packObsNum(v) {
+  if (v === '' || v == null) return '';
+  var n = parseFloat(v);
+  return isFinite(n) ? String(n) : '';
+}
+
+function obsStationsBlob(stations) {
+  if (!stations || !stations.length) return '';
+  var lines = [];
+  for (var i = 0; i < stations.length; i++) {
+    var s = stations[i];
+    lines.push([
+      s.name,
+      s.lat,
+      s.lon,
+      packObsNum(s.temp),
+      packObsNum(s.hum),
+      packObsNum(s.deltaT),
+      packObsNum(s.apparent),
+      packObsNum(s.msl),
+      packObsNum(s.windKmh),
+      packObsNum(s.dew)
+    ].join('\t'));
+  }
+  return lines.join('\n');
+}
+
 function openConfig() {
-  Pebble.openURL(config.toUrl(loadSettings(), {
-    autoLocation: autoLocationLabel(),
-    townsBlob: townsBlob(),
-    postcodesBlob: postcodesBlob(),
-    townCount: bom.getTowns().length,
-    refreshStatus: refreshStatusText(),
-    showRadar: hasRadar()
-  }));
+  var settings = loadSettings();
+  bom.listObsStations(function (err, stations) {
+    var list = stations || [];
+    var autoLoc = configLocation();
+    if (!autoLoc && settings.TownName) {
+      autoLoc = bom.findTown(settings.TownName);
+    }
+    var extras = {
+      autoLocation: autoLocationLabel(),
+      autoLat: autoLoc ? autoLoc.lat : null,
+      autoLon: autoLoc ? autoLoc.lon : null,
+      autoObs: bom.obsStationLabelForLoc(autoLoc, list),
+      manualObs: '—',
+      obsBlob: obsStationsBlob(list),
+      obsHelpers: bom.obsPageHelpersSource(),
+      townsBlob: townsBlob(),
+      postcodesBlob: postcodesBlob(),
+      townCount: bom.getTowns().length,
+      refreshStatus: refreshStatusText(),
+      showRadar: hasRadar()
+    };
+    function show(manualLoc) {
+      if (manualLoc) {
+        extras.manualObs = bom.obsStationLabelForLoc(manualLoc, list);
+      }
+      Pebble.openURL(config.toUrl(loadSettings(), extras));
+    }
+    if (settings.TownName) {
+      bom.resolveQuery(settings.TownName, function (qErr, manualLoc) {
+        show(!qErr && manualLoc ? manualLoc : null);
+      });
+      return;
+    }
+    show(null);
+  });
 }
 
 Pebble.addEventListener('ready', function () {

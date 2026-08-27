@@ -5,7 +5,7 @@
 static Window *s_window;
 static Layer *s_header;
 static Layer *s_hint;
-#define NUM_LINES 6
+#define NUM_LINES 7
 static TextLayer *s_lines[NUM_LINES];
 static ScrollLayer *s_scroll;
 static TextLayer *s_wrap;
@@ -51,8 +51,61 @@ static int s_scroll_max;
 #endif
 
 #define HEADER_H (TOP_INSET + ICON_SIZE + 4 + TITLE_H)
+#define TITLE_H_SINGLE (TITLE_H / 2 + 4)
+#define HEADER_H_CURRENT (TOP_INSET + ICON_SIZE + 4 + TITLE_H_SINGLE)
 #define SCROLL_STEP_MS 110
 #define SCROLL_PAUSE_MS 2000
+
+static int header_height(void) {
+  return s_index == DETAIL_CURRENT ? HEADER_H_CURRENT : HEADER_H;
+}
+
+static void suffix_mark(char *buf, size_t n, int bit, char mark) {
+  if ((g_weather.now_calc_flags & bit) == 0) {
+    return;
+  }
+  size_t len = strlen(buf);
+  if (len + 1 < n) {
+    buf[len] = mark;
+    buf[len + 1] = '\0';
+  }
+}
+
+#define FOOTNOTE_DUAL "* = Calculated  ^ = Nearby"
+#define FOOTNOTE_DUAL_SHORT "* Calc  ^ Near"
+
+static void format_obs_footnote(char *out, size_t n, int page_flags) {
+  int flags = g_weather.now_calc_flags & page_flags;
+  int star = flags &
+             (NOW_CALC_HUM | NOW_CALC_DELTA | NOW_CALC_APPARENT |
+              NOW_CALC_DEW | NOW_CALC_MSL_INTERP);
+  int caret = flags & NOW_CALC_MSL_NEAR;
+  if (star && caret) {
+    snprintf(out, n, FOOTNOTE_DUAL);
+  } else if (star) {
+    snprintf(out, n, "* = Calculated");
+  } else if (caret) {
+    snprintf(out, n, "^ = Nearby station");
+  } else {
+    out[0] = '\0';
+  }
+}
+
+static void fit_obs_footnote(int width) {
+  char *text = s_line_text[NUM_LINES - 1];
+  if (s_index != DETAIL_CURRENT || !text[0] ||
+      strcmp(text, FOOTNOTE_DUAL) != 0) {
+    return;
+  }
+  GFont font = fonts_get_system_font(BODY_FONT);
+  GSize sz = graphics_text_layout_get_content_size(
+      text, font, GRect(0, 0, 1000, LINE_H),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  if (sz.w <= width) {
+    return;
+  }
+  snprintf(text, sizeof(s_line_text[NUM_LINES - 1]), FOOTNOTE_DUAL_SHORT);
+}
 
 static void set_line(int i, const char *text) {
   if (text && text[0]) {
@@ -230,6 +283,7 @@ static void rebuild_lines(void) {
       char wind[40];
       char uv[32];
       char fdr[40];
+      char note[48];
       if (g_weather.has_now_temp) {
         snprintf(temp, sizeof(temp), "Temperature %d\xC2\xB0" "C", g_weather.now_temp);
       } else {
@@ -242,6 +296,7 @@ static void rebuild_lines(void) {
       }
       if (g_weather.has_now_hum) {
         snprintf(hum, sizeof(hum), "Humidity %d%%", g_weather.now_hum);
+        suffix_mark(hum, sizeof(hum), NOW_CALC_HUM, '*');
       } else {
         snprintf(hum, sizeof(hum), "Humidity --");
       }
@@ -260,6 +315,8 @@ static void rebuild_lines(void) {
       set_line(3, wind);
       set_line(4, uv);
       set_line(5, fdr);
+      format_obs_footnote(note, sizeof(note), NOW_CALC_HUM);
+      set_line(6, note);
     } else {
       char app[32];
       char msl[32];
@@ -267,13 +324,21 @@ static void rebuild_lines(void) {
       char dew[32];
       char delta[32];
       char sun[32];
+      char note[48];
       if (g_weather.has_now_apparent) {
         snprintf(app, sizeof(app), "Apparent %d\xC2\xB0" "C", g_weather.now_apparent);
+        suffix_mark(app, sizeof(app), NOW_CALC_APPARENT, '*');
       } else {
         snprintf(app, sizeof(app), "Apparent --");
       }
       if (g_weather.has_now_msl) {
-        snprintf(msl, sizeof(msl), "MSL %d hPa", g_weather.now_msl);
+        snprintf(msl, sizeof(msl), "MSL %d.%d hPa",
+                 g_weather.now_msl / 10, (g_weather.now_msl < 0 ? -g_weather.now_msl : g_weather.now_msl) % 10);
+        if (g_weather.now_calc_flags & NOW_CALC_MSL_NEAR) {
+          suffix_mark(msl, sizeof(msl), NOW_CALC_MSL_NEAR, '^');
+        } else {
+          suffix_mark(msl, sizeof(msl), NOW_CALC_MSL_INTERP, '*');
+        }
       } else {
         snprintf(msl, sizeof(msl), "MSL --");
       }
@@ -284,11 +349,13 @@ static void rebuild_lines(void) {
       }
       if (g_weather.has_now_dew) {
         snprintf(dew, sizeof(dew), "Dew %d\xC2\xB0" "C", g_weather.now_dew);
+        suffix_mark(dew, sizeof(dew), NOW_CALC_DEW, '*');
       } else {
         snprintf(dew, sizeof(dew), "Dew --");
       }
       if (g_weather.has_now_delta) {
         snprintf(delta, sizeof(delta), "Delta-T %d\xC2\xB0" "C", g_weather.now_delta);
+        suffix_mark(delta, sizeof(delta), NOW_CALC_DELTA, '*');
       } else {
         snprintf(delta, sizeof(delta), "Delta-T --");
       }
@@ -299,6 +366,10 @@ static void rebuild_lines(void) {
       set_line(3, dew);
       set_line(4, delta);
       set_line(5, sun);
+      format_obs_footnote(note, sizeof(note),
+                          NOW_CALC_APPARENT | NOW_CALC_DEW | NOW_CALC_DELTA |
+                          NOW_CALC_MSL_NEAR | NOW_CALC_MSL_INTERP);
+      set_line(6, note);
     }
     return;
   }
@@ -362,7 +433,12 @@ static void layout_body(void) {
   GRect bounds = layer_get_bounds(window_get_root_layer(s_window));
   int w = bounds.size.w - (s_pad * 2);
   int i;
+  int hh = header_height();
   auto_scroll_stop();
+
+  if (s_header) {
+    layer_set_frame(s_header, GRect(0, 0, bounds.size.w, hh));
+  }
 
   bool extra_page = (page_kind() == KIND_COASTAL) ||
                     (page_kind() == KIND_EXTRA && s_index != DETAIL_CURRENT);
@@ -379,12 +455,12 @@ static void layout_body(void) {
         layer_set_hidden(text_layer_get_layer(s_lines[i]), true);
       }
     }
-    int view_h = bounds.size.h - HEADER_H - PBL_IF_ROUND_ELSE(18, 6);
+    int view_h = bounds.size.h - hh - PBL_IF_ROUND_ELSE(18, 6);
     if (view_h < LINE_H * 3) {
       view_h = LINE_H * 3;
     }
     if (s_scroll && s_wrap) {
-      layer_set_frame(scroll_layer_get_layer(s_scroll), GRect(s_pad, HEADER_H, w, view_h));
+      layer_set_frame(scroll_layer_get_layer(s_scroll), GRect(s_pad, hh, w, view_h));
       text_layer_set_text_alignment(s_wrap, GTextAlignmentCenter);
       text_layer_set_overflow_mode(s_wrap, GTextOverflowModeWordWrap);
       text_layer_set_size(s_wrap, GSize(w, 2000));
@@ -405,7 +481,9 @@ static void layout_body(void) {
     layer_set_hidden(s_compass, true);
   }
 
-  int y = HEADER_H;
+  fit_obs_footnote(w);
+
+  int y = hh;
   for (i = 0; i < NUM_LINES; i++) {
     if (!s_lines[i]) {
       continue;
@@ -436,6 +514,8 @@ static void layout_body(void) {
       }
       x = start + cw + gap;
       lw = total - cw - gap;
+      text_layer_set_text_alignment(s_lines[i], GTextAlignmentLeft);
+    } else if (s_index == DETAIL_CURRENT && i == NUM_LINES - 1) {
       text_layer_set_text_alignment(s_lines[i], GTextAlignmentLeft);
     } else {
       text_layer_set_text_alignment(s_lines[i], GTextAlignmentCenter);
@@ -503,7 +583,11 @@ static void header_update(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, date, font, line2,
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   } else {
-    GRect title_box = GRect(4, TOP_INSET + ICON_SIZE, bounds.size.w - 8, TITLE_H);
+    int title_h = bounds.size.h - TOP_INSET - ICON_SIZE;
+    if (title_h < TITLE_H_SINGLE) {
+      title_h = TITLE_H_SINGLE;
+    }
+    GRect title_box = GRect(4, TOP_INSET + ICON_SIZE, bounds.size.w - 8, title_h);
     graphics_draw_text(ctx, title, font, title_box,
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   }

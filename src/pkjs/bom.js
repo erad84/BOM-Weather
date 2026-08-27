@@ -741,52 +741,357 @@ function parseObsStations(xml) {
   return stations;
 }
 
+var MSL_NEAR_KM = 100;
+var MSL_INTERP_KM = 250;
+
+var OBS_NEIGHBOURS = {
+  NSW: ['VIC', 'QLD', 'SA'],
+  ACT: ['VIC', 'QLD', 'SA'],
+  VIC: ['NSW', 'SA', 'TAS'],
+  QLD: ['NSW', 'NT', 'SA'],
+  SA: ['NSW', 'VIC', 'QLD', 'WA', 'NT'],
+  WA: ['SA', 'NT'],
+  TAS: ['VIC'],
+  NT: ['QLD', 'SA', 'WA']
+};
+
 function numOrNull(v) {
   if (v === '' || v == null) return null;
   var n = parseFloat(v);
   return isFinite(n) ? n : null;
 }
 
-function formatObs(stn) {
+function dewFromTempHum(t, h) {
+  if (t == null || h == null || h <= 0) return null;
+  var g = Math.log(h / 100) + (17.625 * t) / (243.04 + t);
+  var d = 17.625 - g;
+  if (Math.abs(d) < 1e-9) return null;
+  var dew = 243.04 * g / d;
+  return isFinite(dew) ? dew : null;
+}
+
+function humFromTempDew(t, dew) {
+  if (t == null || dew == null) return null;
+  var eT = Math.exp((17.625 * t) / (243.04 + t));
+  var eD = Math.exp((17.625 * dew) / (243.04 + dew));
+  if (!eT) return null;
+  var h = 100 * eD / eT;
+  if (h < 0) h = 0;
+  if (h > 100) h = 100;
+  return isFinite(h) ? h : null;
+}
+
+function wetBulbStull(t, rh) {
+  if (t == null || rh == null) return null;
+  var tw = t * Math.atan(0.151977 * Math.pow(rh + 8.313659, 0.5)) +
+    Math.atan(t + rh) -
+    Math.atan(rh - 1.676331) +
+    0.00391838 * Math.pow(rh, 1.5) * Math.atan(0.023101 * rh) -
+    4.686035;
+  return isFinite(tw) ? tw : null;
+}
+
+function vapourPressure(t, rh) {
+  if (t == null || rh == null) return null;
+  return (rh / 100) * 6.105 * Math.exp(17.27 * t / (237.7 + t));
+}
+
+function apparentSteadman(t, rh, windKmh) {
+  if (t == null || rh == null || windKmh == null) return null;
+  var e = vapourPressure(t, rh);
+  if (e == null) return null;
+  var ws = windKmh / 3.6;
+  var at = t + 0.33 * e - 0.70 * ws - 4.00;
+  return isFinite(at) ? at : null;
+}
+
+function bearingTo(lat, lon, slat, slon) {
+  var dlon = (slon - lon) * Math.PI / 180;
+  var y = Math.sin(dlon) * Math.cos(slat * Math.PI / 180);
+  var x = Math.cos(lat * Math.PI / 180) * Math.sin(slat * Math.PI / 180) -
+    Math.sin(lat * Math.PI / 180) * Math.cos(slat * Math.PI / 180) * Math.cos(dlon);
+  return Math.atan2(y, x);
+}
+
+function stationsSurround(lat, lon, stations) {
+  if (!stations || stations.length < 3) return false;
+  var br = [];
+  var i;
+  for (i = 0; i < stations.length; i++) {
+    br.push(bearingTo(lat, lon, stations[i].lat, stations[i].lon));
+  }
+  br.sort(function (a, b) { return a - b; });
+  for (i = 0; i < br.length; i++) {
+    var next = i + 1 < br.length ? br[i + 1] : br[0] + Math.PI * 2;
+    if (next - br[i] >= Math.PI) return false;
+  }
+  return true;
+}
+
+function solve3(m, rhs) {
+  var a = [
+    [m[0][0], m[0][1], m[0][2], rhs[0]],
+    [m[1][0], m[1][1], m[1][2], rhs[1]],
+    [m[2][0], m[2][1], m[2][2], rhs[2]]
+  ];
+  var i;
+  var r;
+  var c;
+  for (i = 0; i < 3; i++) {
+    var piv = i;
+    for (r = i + 1; r < 3; r++) {
+      if (Math.abs(a[r][i]) > Math.abs(a[piv][i])) piv = r;
+    }
+    if (Math.abs(a[piv][i]) < 1e-12) return null;
+    var tmp = a[i];
+    a[i] = a[piv];
+    a[piv] = tmp;
+    var d = a[i][i];
+    for (c = i; c < 4; c++) a[i][c] /= d;
+    for (r = 0; r < 3; r++) {
+      if (r === i) continue;
+      var f = a[r][i];
+      for (c = i; c < 4; c++) a[r][c] -= f * a[i][c];
+    }
+  }
+  return [a[0][3], a[1][3], a[2][3]];
+}
+
+function planarMsl(lat, lon, stations) {
+  if (!stations || stations.length < 3) return null;
+  var n = stations.length;
+  var sumLat = 0;
+  var sumLon = 0;
+  var sumP = 0;
+  var sumLat2 = 0;
+  var sumLon2 = 0;
+  var sumLatLon = 0;
+  var sumLatP = 0;
+  var sumLonP = 0;
+  var i;
+  for (i = 0; i < n; i++) {
+    var slat = stations[i].lat;
+    var slon = stations[i].lon;
+    var p = stations[i].msl;
+    sumLat += slat;
+    sumLon += slon;
+    sumP += p;
+    sumLat2 += slat * slat;
+    sumLon2 += slon * slon;
+    sumLatLon += slat * slon;
+    sumLatP += slat * p;
+    sumLonP += slon * p;
+  }
+  var coef = solve3(
+    [[n, sumLat, sumLon], [sumLat, sumLat2, sumLatLon], [sumLon, sumLatLon, sumLon2]],
+    [sumP, sumLatP, sumLonP]
+  );
+  if (!coef) return null;
+  var msl = coef[0] + coef[1] * lat + coef[2] * lon;
+  return isFinite(msl) ? msl : null;
+}
+
+function mslDonorsWithin(list, lat, lon, maxKm) {
+  var out = [];
+  if (!list) return out;
+  var i;
+  for (i = 0; i < list.length; i++) {
+    var st = list[i];
+    if (!hasCoords(st)) continue;
+    var msl = numOrNull(st.msl);
+    if (msl == null) continue;
+    var d = haversine(lat, lon, st.lat, st.lon);
+    if (d > maxKm) continue;
+    out.push({
+      name: st.name || 'Observation site',
+      lat: st.lat,
+      lon: st.lon,
+      msl: msl,
+      km: d
+    });
+  }
+  out.sort(function (a, b) { return a.km - b.km; });
+  return out;
+}
+
+function fillThermo(obs) {
+  if (!obs || !obs.calc) return;
+  if (obs.dew == null && obs.temp != null && obs.hum != null) {
+    var dew = dewFromTempHum(obs.temp, obs.hum);
+    if (dew != null) {
+      obs.dew = dew;
+      obs.calc.dew = true;
+    }
+  }
+  if (obs.hum == null && obs.temp != null && obs.dew != null) {
+    var h = humFromTempDew(obs.temp, obs.dew);
+    if (h != null) {
+      obs.hum = h;
+      obs.calc.hum = true;
+    }
+  }
+  if (obs.deltaT == null && obs.temp != null && obs.hum != null) {
+    var tw = wetBulbStull(obs.temp, obs.hum);
+    if (tw != null) {
+      obs.deltaT = obs.temp - tw;
+      obs.calc.deltaT = true;
+    }
+  }
+  if (obs.apparent == null && obs.temp != null && obs.hum != null && obs.windKmh != null) {
+    var at = apparentSteadman(obs.temp, obs.hum, obs.windKmh);
+    if (at != null) {
+      obs.apparent = at;
+      obs.calc.apparent = true;
+    }
+  }
+}
+
+function fillMsl(obs, list, lat, lon) {
+  if (!obs || !obs.calc || obs.msl != null) return;
+  var near = mslDonorsWithin(list, lat, lon, MSL_NEAR_KM);
+  if (near.length) {
+    obs.msl = near[0].msl;
+    obs.calc.mslNearby = true;
+    obs.calc.mslDonor = {
+      name: near[0].name,
+      km: Math.round(near[0].km)
+    };
+    return;
+  }
+  var wide = mslDonorsWithin(list, lat, lon, MSL_INTERP_KM);
+  if (wide.length < 3 || !stationsSurround(lat, lon, wide)) return;
+  var msl = planarMsl(lat, lon, wide);
+  if (msl == null) return;
+  obs.msl = msl;
+  obs.calc.mslInterp = true;
+}
+
+function rawFromStation(stn) {
   if (!stn) return null;
-  var t = numOrNull(stn.temp);
-  var h = numOrNull(stn.hum);
-  var d = numOrNull(stn.deltaT);
-  var a = numOrNull(stn.apparent);
-  var msl = numOrNull(stn.msl);
-  if (t != null) t = Math.round(t);
-  if (h != null) h = Math.round(h);
-  if (d != null) d = Math.round(d);
-  if (a != null) a = Math.round(a);
-  if (msl != null) msl = Math.round(msl);
-  var dir = (stn.windDir || '').replace(/-/g, '');
+  var dir = String(stn.windDir || '').replace(/-/g, '');
   var spd = numOrNull(stn.windKmh);
-  var gust = numOrNull(stn.gust);
-  var dew = numOrNull(stn.dew);
-  if (spd != null) spd = Math.round(spd);
-  if (gust != null) gust = Math.round(gust);
-  if (dew != null) dew = Math.round(dew);
   var rain = String(stn.rain == null ? '' : stn.rain).replace(/^\s+|\s+$/g, '');
   if (rain === '-' || rain === 'n/a') rain = '';
+  return {
+    name: stn.name || '',
+    lat: stn.lat,
+    lon: stn.lon,
+    temp: numOrNull(stn.temp),
+    hum: numOrNull(stn.hum),
+    deltaT: numOrNull(stn.deltaT),
+    apparent: numOrNull(stn.apparent),
+    msl: numOrNull(stn.msl),
+    windDir: dir,
+    windKmh: spd,
+    gust: numOrNull(stn.gust),
+    dew: numOrNull(stn.dew),
+    rain: rain,
+    calc: {
+      hum: false,
+      deltaT: false,
+      apparent: false,
+      dew: false,
+      mslNearby: false,
+      mslInterp: false,
+      mslDonor: null
+    }
+  };
+}
+
+function roundFilledObs(obs) {
+  if (!obs) return null;
+  if (obs.temp != null) obs.temp = Math.round(obs.temp);
+  if (obs.hum != null) obs.hum = Math.round(obs.hum);
+  if (obs.deltaT != null) obs.deltaT = Math.round(obs.deltaT);
+  if (obs.apparent != null) obs.apparent = Math.round(obs.apparent);
+  if (obs.msl != null) obs.msl = Math.round(obs.msl * 10) / 10;
+  if (obs.windKmh != null) obs.windKmh = Math.round(obs.windKmh);
+  if (obs.gust != null) obs.gust = Math.round(obs.gust);
+  if (obs.dew != null) obs.dew = Math.round(obs.dew);
+  var dir = obs.windDir || '';
+  var spd = obs.windKmh;
   var wind = '';
   if (dir && dir !== 'CALM' && spd != null) wind = dir + ' ' + spd + ' km/h';
   else if (dir === 'CALM' || spd === 0) wind = 'Calm';
   else if (dir) wind = dir;
   else if (spd != null) wind = spd + ' km/h';
-  if (t == null && h == null && d == null && a == null && msl == null && !wind && gust == null && dew == null && !rain) return null;
-  return {
-    temp: t,
-    hum: h,
-    deltaT: d,
-    apparent: a,
-    msl: msl,
-    wind: wind,
-    windDir: dir && dir !== 'CALM' ? dir : (spd === 0 ? 'Calm' : ''),
-    windKmh: spd,
-    gust: gust,
-    dew: dew,
-    rain: rain
-  };
+  obs.wind = wind;
+  obs.windDir = dir && dir !== 'CALM' ? dir : (spd === 0 ? 'Calm' : '');
+  if (obs.temp == null && obs.hum == null && obs.deltaT == null && obs.apparent == null &&
+      obs.msl == null && !wind && obs.gust == null && obs.dew == null && !obs.rain) {
+    return null;
+  }
+  return obs;
+}
+
+function fillObsAt(lat, lon, list) {
+  if (typeof lat !== 'number' || typeof lon !== 'number' || !list || !list.length) return null;
+  var nearest = nearestFrom(list, lat, lon);
+  if (!nearest) return null;
+  var obs = rawFromStation(nearest);
+  if (!obs) return null;
+  fillThermo(obs);
+  fillMsl(obs, list, lat, lon);
+  return roundFilledObs(obs);
+}
+
+function obsFillNotes(obs) {
+  var notes = [];
+  if (!obs || !obs.calc) return notes;
+  var c = obs.calc;
+  if (c.hum) notes.push('Humidity* \u2014 calculated');
+  if (c.dew) notes.push('Dew* \u2014 calculated');
+  if (c.deltaT) notes.push('Delta-T* \u2014 calculated');
+  if (c.apparent) notes.push('Apparent* \u2014 calculated');
+  if (c.mslNearby) {
+    if (c.mslDonor && c.mslDonor.name) {
+      notes.push('MSL^ \u2014 pulled from ' + c.mslDonor.name + ' (' + c.mslDonor.km + ' km)');
+    } else {
+      notes.push('MSL^ \u2014 pulled from nearby station');
+    }
+  }
+  if (c.mslInterp) notes.push('MSL* \u2014 calculated from surrounding stations');
+  return notes;
+}
+
+function obsCalcMask(obs) {
+  if (!obs || !obs.calc) return 0;
+  var c = obs.calc;
+  var f = 0;
+  if (c.hum) f |= 1;
+  if (c.deltaT) f |= 2;
+  if (c.apparent) f |= 4;
+  if (c.dew) f |= 8;
+  if (c.mslNearby) f |= 16;
+  if (c.mslInterp) f |= 32;
+  return f;
+}
+
+function obsPageHelpersSource() {
+  return [
+    'var MSL_NEAR_KM=' + MSL_NEAR_KM + ';',
+    'var MSL_INTERP_KM=' + MSL_INTERP_KM + ';',
+    haversine.toString(),
+    hasCoords.toString(),
+    nearestFrom.toString(),
+    numOrNull.toString(),
+    dewFromTempHum.toString(),
+    humFromTempDew.toString(),
+    wetBulbStull.toString(),
+    vapourPressure.toString(),
+    apparentSteadman.toString(),
+    bearingTo.toString(),
+    stationsSurround.toString(),
+    solve3.toString(),
+    planarMsl.toString(),
+    mslDonorsWithin.toString(),
+    fillThermo.toString(),
+    fillMsl.toString(),
+    rawFromStation.toString(),
+    roundFilledObs.toString(),
+    fillObsAt.toString(),
+    obsFillNotes.toString()
+  ].join('\n');
 }
 
 function parseObsJson(text) {
@@ -822,19 +1127,148 @@ function parseObsJson(text) {
   }
 }
 
-function fetchNearestObs(loc, cb) {
-  var product = OBS_PRODUCTS[loc && loc.s] || OBS_PRODUCTS.NSW;
+function loadObsProduct(product, cb) {
   xhrTextFallback(product + '.xml', function (err, xml) {
     var stations = parseObsStations(xml);
-    function finish(list) {
-      var nearest = nearestFrom(list, loc.lat, loc.lon);
-      cb(null, formatObs(nearest));
-    }
-    if (stations.length) return finish(stations);
+    if (stations.length) return cb(stations);
     xhrTextFallback(product + '/' + product + '.json', function (jerr, text) {
-      finish(parseObsJson(text || ''));
+      cb(parseObsJson(text || ''));
     });
   });
+}
+
+function mergeObsStations(a, b) {
+  var seen = {};
+  var out = [];
+  function add(list) {
+    if (!list) return;
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var s = list[i];
+      if (!hasCoords(s)) continue;
+      var k = s.lat.toFixed(4) + ',' + s.lon.toFixed(4);
+      if (seen[k]) continue;
+      seen[k] = true;
+      out.push(s);
+    }
+  }
+  add(a);
+  add(b);
+  return out;
+}
+
+function loadStatesObs(states, cb) {
+  var products = [];
+  var seen = {};
+  var i;
+  for (i = 0; i < states.length; i++) {
+    var p = OBS_PRODUCTS[states[i]] || OBS_PRODUCTS.NSW;
+    if (seen[p]) continue;
+    seen[p] = true;
+    products.push(p);
+  }
+  if (!products.length) return cb([]);
+  var all = [];
+  var left = products.length;
+  products.forEach(function (p) {
+    loadObsProduct(p, function (list) {
+      all = mergeObsStations(all, list);
+      left--;
+      if (left <= 0) cb(all);
+    });
+  });
+}
+
+function fetchNearestObs(loc, cb) {
+  var home = (loc && loc.s) || 'NSW';
+  var product = OBS_PRODUCTS[home] || OBS_PRODUCTS.NSW;
+  loadObsProduct(product, function (stations) {
+    var obs = fillObsAt(loc.lat, loc.lon, stations);
+    if (obs && obs.msl != null) return cb(null, obs);
+    var neigh = OBS_NEIGHBOURS[home] || [];
+    if (!neigh.length) return cb(null, obs);
+    loadStatesObs(neigh, function (extra) {
+      cb(null, fillObsAt(loc.lat, loc.lon, mergeObsStations(stations, extra)));
+    });
+  });
+}
+
+var obsStationCache = null;
+var obsStationCacheAt = 0;
+
+function pushObsStations(into, list, state) {
+  if (!list || !into) return;
+  for (var i = 0; i < list.length; i++) {
+    var st = list[i];
+    if (!hasCoords(st)) continue;
+    into.push({
+      name: st.name || 'Observation site',
+      lat: st.lat,
+      lon: st.lon,
+      s: state,
+      temp: st.temp,
+      hum: st.hum,
+      deltaT: st.deltaT,
+      apparent: st.apparent,
+      msl: st.msl,
+      windDir: st.windDir,
+      windKmh: st.windKmh,
+      gust: st.gust,
+      dew: st.dew,
+      rain: st.rain
+    });
+  }
+}
+
+function listObsStations(cb) {
+  if (obsStationCache && Date.now() - obsStationCacheAt < 1800000) {
+    return cb(null, obsStationCache);
+  }
+  var products = [];
+  var seen = {};
+  Object.keys(OBS_PRODUCTS).forEach(function (st) {
+    var p = OBS_PRODUCTS[st];
+    if (seen[p]) return;
+    seen[p] = true;
+    products.push({ p: p, s: st });
+  });
+  var all = [];
+  var left = products.length;
+  if (!left) return cb(null, []);
+  function done() {
+    left--;
+    if (left > 0) return;
+    obsStationCache = all;
+    obsStationCacheAt = Date.now();
+    cb(null, all);
+  }
+  products.forEach(function (item) {
+    loadObsProduct(item.p, function (stations) {
+      pushObsStations(all, stations, item.s);
+      done();
+    });
+  });
+}
+
+function nearestObsStationFromList(lat, lon, stations) {
+  if (typeof lat !== 'number' || typeof lon !== 'number' ||
+      !(lat || lon) || !stations || !stations.length) return null;
+  var best = nearestFrom(stations, lat, lon);
+  if (!best || !best.name) return null;
+  return {
+    name: best.name,
+    km: Math.round(haversine(lat, lon, best.lat, best.lon))
+  };
+}
+
+function formatObsStationLabel(st) {
+  if (!st || !st.name) return 'None nearby';
+  return st.name + ' \u00b7 ' + st.km + ' km';
+}
+
+function obsStationLabelForLoc(loc, stations) {
+  if (!loc || !hasCoords(loc)) return 'Not detected yet';
+  return formatObsStationLabel(nearestObsStationFromList(loc.lat, loc.lon, stations));
 }
 
 var WARN_FEEDS = {
@@ -1380,5 +1814,11 @@ module.exports = {
   pebbleSafe: pebbleSafe,
   cleanWarnTitle: cleanWarnTitle,
   warningPageUrls: warningPageUrls,
-  fetchWarningPage: fetchWarningPage
+  fetchWarningPage: fetchWarningPage,
+  listObsStations: listObsStations,
+  obsStationLabelForLoc: obsStationLabelForLoc,
+  fillObsAt: fillObsAt,
+  obsFillNotes: obsFillNotes,
+  obsCalcMask: obsCalcMask,
+  obsPageHelpersSource: obsPageHelpersSource
 };

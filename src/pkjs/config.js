@@ -12,6 +12,11 @@ function toUrl(settings, extras) {
   var mode = settings.LocationMode === 'manual' ? 'manual' : 'auto';
   var town = settings.TownName || '';
   var autoNow = extras.autoLocation || 'Not detected yet';
+  var autoObs = extras.autoObs || 'Not detected yet';
+  var manualObs = extras.manualObs || '—';
+  var locLine = 'Auto currently: ' + autoNow;
+  var autoLat = extras.autoLat;
+  var autoLon = extras.autoLon;
   var refreshStatus = extras.refreshStatus || ((extras.townCount || 0) + ' towns');
   var range = String(settings.RadarRange == null ? '128' : settings.RadarRange);
   if (['64', '128', '256', '512', 'state', 'national'].indexOf(range) === -1) range = '128';
@@ -28,6 +33,8 @@ function toUrl(settings, extras) {
   }
   var blobJs = JSON.stringify(extras.townsBlob || '');
   var pcJs = JSON.stringify(extras.postcodesBlob || '');
+  var obsJs = JSON.stringify(extras.obsBlob || '');
+  var helpers = extras.obsHelpers || '';
 
   var html = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
@@ -40,6 +47,7 @@ function toUrl(settings, extras) {
     'input:disabled{background:#555;color:#999}' +
     'p{color:#aaa;font-size:14px;line-height:1.4;margin:8px 0}' +
     '.auto{background:#2a2a2a;padding:10px;border-radius:4px;color:#fff}' +
+    '.auto.sub{margin-top:6px;padding:8px 10px;font-size:13px;color:#bbb;white-space:pre-line}' +
     '.row{display:flex;align-items:center;gap:12px;margin:0 0 8px}' +
     '.chk{display:block;margin:8px 0;color:#fff;font-size:16px}' +
     '.chk input{width:auto;margin-right:8px}' +
@@ -62,14 +70,16 @@ function toUrl(settings, extras) {
     '<span id="refreshStatus">' + escapeHtml(refreshStatus) + '</span>' +
     '</div>' +
     '<p>Clicking Refresh towns will cause this settings page to close in order to save the update data.</p>' +
-    '<label for="mode">Location</label>' +
+    '<label for="mode">Location mode</label>' +
     '<select id="mode">' +
     '<option value="auto"' + (mode === 'auto' ? ' selected' : '') + '>Auto (phone GPS)</option>' +
     '<option value="manual"' + (mode === 'manual' ? ' selected' : '') + '>Manual town</option>' +
     '</select>' +
-    '<p class="auto" id="autoNow">Auto currently: ' + escapeHtml(autoNow) + '</p>' +
+    '<p class="auto" id="locNow"' + (mode === 'manual' ? ' style="display:none"' : '') + '>' + escapeHtml(locLine) + '</p>' +
+    '<p class="auto sub" id="autoObs"' + (mode === 'manual' ? ' style="display:none"' : '') + '>Obs station: ' + escapeHtml(autoObs) + '</p>' +
     '<label for="town">Town, suburb or postcode</label>' +
     '<input id="town" value="' + escapeHtml(town) + '" placeholder="e.g. Newcastle or 2300" autocomplete="off">' +
+    '<p class="auto sub" id="manualObs"' + (mode === 'auto' ? ' style="display:none"' : '') + '>Obs station: ' + escapeHtml(manualObs) + '</p>' +
     '<div id="matches"></div>' +
     '<p>Pick a BOM forecast town. Enter a postcode to see the 3 nearest supported towns.</p>' +
     '<label>Pages</label>' +
@@ -100,7 +110,8 @@ function toUrl(settings, extras) {
     '<script>' +
     'var raw=' + blobJs + ';' +
     'var pcraw=' + pcJs + ';' +
-    'var towns=[];var postcodes=[];' +
+    'var obsraw=' + obsJs + ';' +
+    'var towns=[];var postcodes=[];var obsList=[];' +
     'raw.split("\\n").forEach(function(line){' +
     'var p=line.split("\\t");' +
     'if(p[0])towns.push({n:p[0],s:p[1]||"",lat:+p[2]||0,lon:+p[3]||0});' +
@@ -109,9 +120,79 @@ function toUrl(settings, extras) {
     'var p=line.split("\\t");' +
     'if(p[0])postcodes.push({pc:p[0],lat:+p[1],lon:+p[2]});' +
     '});' +
+    '\n' + helpers + '\n' +
+    'obsraw.split("\\n").forEach(function(line){' +
+    'var p=line.split("\\t");' +
+    'if(!p[0])return;' +
+    'obsList.push({name:p[0],lat:+p[1],lon:+p[2],' +
+    'temp:numOrNull(p[3]),hum:numOrNull(p[4]),deltaT:numOrNull(p[5]),' +
+    'apparent:numOrNull(p[6]),msl:numOrNull(p[7]),windKmh:numOrNull(p[8]),dew:numOrNull(p[9])});' +
+    '});' +
+    'var autoTown=' + JSON.stringify(autoNow) + ';' +
+    'var autoLat=' + (autoLat == null || autoLat === '' ? 'null' : Number(autoLat)) + ';' +
+    'var autoLon=' + (autoLon == null || autoLon === '' ? 'null' : Number(autoLon)) + ';' +
+    'var savedTown=' + JSON.stringify(town) + ';' +
+    'var locNowEl=document.getElementById("locNow");' +
+    'var autoObsEl=document.getElementById("autoObs");' +
     'var input=document.getElementById("town");' +
     'var list=document.getElementById("matches");' +
+    'var manualObsEl=document.getElementById("manualObs");' +
     'function labelOf(t){return t.s?t.n+", "+t.s:t.n;}' +
+    'function townByLabel(lab){' +
+    'if(!lab)return null;' +
+    'var ql=lab.toLowerCase();' +
+    'var hits=[];' +
+    'for(var i=0;i<towns.length;i++){' +
+    'var t=towns[i];var l=labelOf(t).toLowerCase();' +
+    'if(l===ql||t.n.toLowerCase()===ql)hits.push(t);' +
+    '}' +
+    'return hits.length===1?hits[0]:null;' +
+    '}' +
+    'function obsFor(lat,lon){' +
+    'if(!lat&&!lon)return "—";' +
+    'var best=null,bd=1e9;' +
+    'for(var i=0;i<obsList.length;i++){' +
+    'var d=dist(lat,lon,obsList[i].lat,obsList[i].lon);' +
+    'if(d<bd){bd=d;best=obsList[i];}' +
+    '}' +
+    'return best?best.name+" · "+Math.round(bd)+" km":"None nearby";' +
+    '}' +
+    'function setObs(el,lat,lon){' +
+    'if(!el)return;' +
+    'var line="Obs station: "+obsFor(lat,lon);' +
+    'if((lat||lon)&&typeof fillObsAt==="function"){' +
+    'var filled=fillObsAt(lat,lon,obsList);' +
+    'var notes=typeof obsFillNotes==="function"?obsFillNotes(filled):[];' +
+    'if(notes&&notes.length)line+="\\n"+notes.join("\\n");' +
+    '}' +
+    'el.textContent=line;' +
+    '}' +
+    'function setManualObs(lat,lon){' +
+    'setObs(manualObsEl,lat,lon);' +
+    '}' +
+    'function townUnchanged(){' +
+    'return input.value.trim()===savedTown;' +
+    '}' +
+    'function hideMatches(){' +
+    'list.innerHTML="";' +
+    'list.style.display="none";' +
+    '}' +
+    'function selectedTown(){' +
+    'var q=input.value.trim();' +
+    'if(!q)return null;' +
+    'if(/^\\d{4}$/.test(q)){' +
+    'for(var i=0;i<postcodes.length;i++){if(postcodes[i].pc===q)return postcodes[i];}' +
+    'return null;' +
+    '}' +
+    'return townByLabel(q);' +
+    '}' +
+    'function syncLocLine(){' +
+    'var auto=modeEl.value==="auto";' +
+    'locNowEl.style.display=auto?"":"none";' +
+    'autoObsEl.style.display=auto?"":"none";' +
+    'manualObsEl.style.display=auto?"none":"";' +
+    'if(auto){locNowEl.textContent="Auto currently: "+autoTown;setObs(autoObsEl,autoLat,autoLon);}' +
+    '}' +
     'function dist(a,b,c,d){var r=6371,x=(c-a)*Math.PI/180,y=(d-b)*Math.PI/180;' +
     'var e=Math.sin(x/2)*Math.sin(x/2)+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(y/2)*Math.sin(y/2);' +
     'return r*2*Math.atan2(Math.sqrt(e),Math.sqrt(1-e));}' +
@@ -128,7 +209,7 @@ function toUrl(settings, extras) {
     'var d=document.createElement("div");' +
     'if(cls)d.className=cls;' +
     'd.textContent=text;' +
-    'if(value)d.onclick=function(){input.value=value;list.innerHTML="";};' +
+    'if(value)d.onclick=function(){input.value=value;hideMatches();var t=townByLabel(value);if(t)setManualObs(t.lat,t.lon);};' +
     'list.appendChild(d);' +
     '}' +
     'function showNearest(lat,lon,title){' +
@@ -138,10 +219,25 @@ function toUrl(settings, extras) {
     'add(lab+" · "+Math.round(x.d)+" km",lab);' +
     '});' +
     '}' +
-    'function render(){' +
+    'function refreshObs(){' +
     'var q=input.value.trim();' +
+    'if(!q){setManualObs(0,0);return;}' +
+    'if(/^\\d{4}$/.test(q)){' +
+    'var pc=null;' +
+    'for(var i=0;i<postcodes.length;i++){if(postcodes[i].pc===q){pc=postcodes[i];break;}}' +
+    'if(pc)setManualObs(pc.lat,pc.lon);else setManualObs(0,0);' +
+    'return;' +
+    '}' +
+    'var exact=townByLabel(q);' +
+    'if(exact)setManualObs(exact.lat,exact.lon);' +
+    'else setManualObs(0,0);' +
+    '}' +
+    'function fillMatches(){' +
     'list.innerHTML="";' +
-    'if(!q)return;' +
+    'if(modeEl.value==="auto"||townUnchanged()){hideMatches();return;}' +
+    'var q=input.value.trim();' +
+    'if(!q){hideMatches();return;}' +
+    'list.style.display="block";' +
     'if(/^\\d{4}$/.test(q)){' +
     'var pc=null;' +
     'for(var i=0;i<postcodes.length;i++){if(postcodes[i].pc===q){pc=postcodes[i];break;}}' +
@@ -157,14 +253,15 @@ function toUrl(settings, extras) {
     '}' +
     'if(!n)add("No exact town. Type a postcode for the 3 nearest, or Save to snap to nearest.","","hint");' +
     '}' +
-    'input.addEventListener("input",render);' +
+    'function onTownInput(){refreshObs();fillMatches();}' +
+    'input.addEventListener("input",onTownInput);' +
     'var modeEl=document.getElementById("mode");' +
     'function syncTown(){' +
     'var auto=modeEl.value==="auto";' +
     'input.disabled=auto;' +
-    'list.style.display=auto?"none":"block";' +
-    'if(auto)list.innerHTML="";' +
-    'else if(input.value)render();' +
+    'if(auto)hideMatches();' +
+    'else {refreshObs();fillMatches();}' +
+    'syncLocLine();' +
     '}' +
     'modeEl.addEventListener("change",syncTown);' +
     'syncTown();' +
