@@ -67,14 +67,18 @@ static int parse_tenths(const char *s) {
   if (!s || !s[0]) {
     return 0;
   }
+  int neg = s[0] == '-';
   int whole = atoi(s);
   const char *dot = strchr(s, '.');
   int tenth = 0;
   if (dot && dot[1] >= '0' && dot[1] <= '9') {
     tenth = dot[1] - '0';
   }
-  if (whole < 0) {
-    return whole * 10 - tenth;
+  if (neg) {
+    if (whole < 0) {
+      return whole * 10 - tenth;
+    }
+    return -tenth;
   }
   return whole * 10 + tenth;
 }
@@ -93,8 +97,8 @@ static void apply_packed_days(const char *packed) {
     if (line_end > line) {
       DayForecast *d = &g_weather.days[g_weather.day_count];
       memset(d, 0, sizeof(*d));
-      d->min = 99;
-      d->max = 99;
+      d->min = TEMP_NONE;
+      d->max = TEMP_NONE;
       d->rain_chance = -1;
 
       const char *field = line;
@@ -237,6 +241,7 @@ static void apply_warn_packed(const char *packed) {
 #define PKEY_LOC 1
 #define PKEY_DAYS 2
 #define PKEY_META 3
+#define PKEY_TENTHS 4
 
 typedef struct {
   char name[MAX_DAY_NAME];
@@ -256,6 +261,7 @@ static void persist_save(void) {
   }
   persist_write_string(PKEY_LOC, g_weather.location);
   persist_write_int(PKEY_META, g_weather.day_count);
+  persist_write_int(PKEY_TENTHS, 1);
   for (int i = 0; i < g_weather.day_count && i < MAX_DAYS; i++) {
     PersistDay p;
     memset(&p, 0, sizeof(p));
@@ -296,6 +302,10 @@ static bool persist_load(void) {
     copy_str(d->precis, sizeof(d->precis), p.precis);
     d->min = p.min;
     d->max = p.max;
+    if (!persist_exists(PKEY_TENTHS)) {
+      d->min = (p.min == 99) ? TEMP_NONE : (int)p.min * 10;
+      d->max = (p.max == 99) ? TEMP_NONE : (int)p.max * 10;
+    }
     d->rain_chance = p.rain_chance;
     d->icon = p.icon;
     copy_str(d->uv, sizeof(d->uv), p.uv);
@@ -410,7 +420,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     g_weather.now_wind_dir[0] = '\0';
     g_weather.has_now = 0;
     if (cond1 && cond1->type == TUPLE_CSTRING && cond1->value->cstring[0]) {
-      g_weather.now_temp = atoi(cond1->value->cstring);
+      g_weather.now_temp = parse_tenths(cond1->value->cstring);
       g_weather.has_now_temp = 1;
       g_weather.has_now = 1;
     }
@@ -431,12 +441,12 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         fields[n++] = "";
       }
       if (fields[0][0]) {
-        g_weather.now_hum = atoi(fields[0]);
+        g_weather.now_hum = parse_tenths(fields[0]);
         g_weather.has_now_hum = 1;
         g_weather.has_now = 1;
       }
       if (fields[1][0]) {
-        g_weather.now_delta = atoi(fields[1]);
+        g_weather.now_delta = parse_tenths(fields[1]);
         g_weather.has_now_delta = 1;
         g_weather.has_now = 1;
       }
@@ -446,7 +456,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         g_weather.has_now = 1;
       }
       if (fields[3][0]) {
-        g_weather.now_apparent = atoi(fields[3]);
+        g_weather.now_apparent = parse_tenths(fields[3]);
         g_weather.has_now_apparent = 1;
         g_weather.has_now = 1;
       }
@@ -460,15 +470,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         g_weather.now_wind_dir[sizeof(g_weather.now_wind_dir) - 1] = '\0';
       }
       if (fields[6][0]) {
-        g_weather.now_wind_kmh = atoi(fields[6]);
+        g_weather.now_wind_kmh = parse_tenths(fields[6]);
         g_weather.has_now_wind_spd = 1;
       }
       if (fields[7][0]) {
-        g_weather.now_gust = atoi(fields[7]);
+        g_weather.now_gust = parse_tenths(fields[7]);
         g_weather.has_now_gust = 1;
       }
       if (fields[8][0]) {
-        g_weather.now_dew = atoi(fields[8]);
+        g_weather.now_dew = parse_tenths(fields[8]);
         g_weather.has_now_dew = 1;
       }
       if (fields[9][0]) {

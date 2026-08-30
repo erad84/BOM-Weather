@@ -85,6 +85,8 @@ function toUrl(settings, extras) {
     '<label>Pages</label>' +
     chk('coastal', 'Coastal details', ovOn('CoastalDetails', false)) +
     '<p>Adds a seas, swell and wind page on Current and each day, using the nearest BOM coastal waters forecast. Also includes marine and coastal warnings such as wind, surf, tsunami and coastal hazard.</p>' +
+    chk('decimals', 'Show decimal places', ovOn('ShowDecimals', false)) +
+    '<p>When on, Current and daily numbers use the decimal places BOM publishes (temperature, MSL, and so on). When off, those values are rounded to whole numbers.</p>' +
     (extras.showRadar === false ? '<div style="display:none">' : '') +
     '<label for="radar">Default radar range</label>' +
     '<select id="radar">' +
@@ -131,6 +133,9 @@ function toUrl(settings, extras) {
     'var autoTown=' + JSON.stringify(autoNow) + ';' +
     'var autoLat=' + (autoLat == null || autoLat === '' ? 'null' : Number(autoLat)) + ';' +
     'var autoLon=' + (autoLon == null || autoLon === '' ? 'null' : Number(autoLon)) + ';' +
+    'var uvNote=' + JSON.stringify(extras.uvNote || '') + ';' +
+    'var uvLat=' + (extras.uvLat == null || extras.uvLat === '' ? 'null' : Number(extras.uvLat)) + ';' +
+    'var uvLon=' + (extras.uvLon == null || extras.uvLon === '' ? 'null' : Number(extras.uvLon)) + ';' +
     'var savedTown=' + JSON.stringify(town) + ';' +
     'var locNowEl=document.getElementById("locNow");' +
     'var autoObsEl=document.getElementById("autoObs");' +
@@ -164,6 +169,15 @@ function toUrl(settings, extras) {
     'var filled=fillObsAt(lat,lon,obsList);' +
     'var notes=typeof obsFillNotes==="function"?obsFillNotes(filled):[];' +
     'if(notes&&notes.length)line+="\\n"+notes.join("\\n");' +
+    '}' +
+    'if(lat!=null&&lon!=null&&(lat||lon)){' +
+    'var uvLines=[];' +
+    'var atLast=uvLat!=null&&uvLon!=null&&dist(lat,lon,uvLat,uvLon)<5;' +
+    'if(atLast){if(uvNote)uvLines=[uvNote];}' +
+    'else if(typeof uvFillForCoords==="function"&&typeof uvFillNotes==="function"){' +
+    'uvLines=uvFillNotes(uvFillForCoords(lat,lon));' +
+    '}' +
+    'if(uvLines&&uvLines.length)line+="\\n"+uvLines.join("\\n");' +
     '}' +
     'el.textContent=line;' +
     '}' +
@@ -269,6 +283,7 @@ function toUrl(settings, extras) {
     'var radarEl=document.getElementById("radar");' +
     'var data={LocationMode:document.getElementById("mode").value,TownName:input.value,' +
     'CoastalDetails:document.getElementById("coastal").checked?1:0,' +
+    'ShowDecimals:document.getElementById("decimals").checked?1:0,' +
     'Theme:document.getElementById("theme").value,' +
     'RadarRange:radarEl.value,' +
     'RadarOvCrosshair:document.getElementById("ovCrosshair").checked?1:0,' +

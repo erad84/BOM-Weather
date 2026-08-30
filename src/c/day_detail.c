@@ -74,18 +74,24 @@ static void suffix_mark(char *buf, size_t n, int bit, char mark) {
 #define FOOTNOTE_DUAL "* = Calculated  ^ = Nearby"
 #define FOOTNOTE_DUAL_SHORT "* Calc  ^ Near"
 
-static void format_obs_footnote(char *out, size_t n, int page_flags) {
+static int uv_is_nearby(const char *uv) {
+  return uv && uv[0] && strchr(uv, '^') != NULL;
+}
+
+static void format_obs_footnote(char *out, size_t n, int page_flags, int extra_caret) {
   int flags = g_weather.now_calc_flags & page_flags;
   int star = flags &
              (NOW_CALC_HUM | NOW_CALC_DELTA | NOW_CALC_APPARENT |
               NOW_CALC_DEW | NOW_CALC_MSL_INTERP);
-  int caret = flags & NOW_CALC_MSL_NEAR;
+  int caret = (flags & NOW_CALC_MSL_NEAR) || extra_caret;
   if (star && caret) {
     snprintf(out, n, FOOTNOTE_DUAL);
   } else if (star) {
     snprintf(out, n, "* = Calculated");
-  } else if (caret) {
+  } else if (flags & NOW_CALC_MSL_NEAR) {
     snprintf(out, n, "^ = Nearby station");
+  } else if (caret) {
+    snprintf(out, n, "^ = Nearby");
   } else {
     out[0] = '\0';
   }
@@ -126,10 +132,13 @@ static void set_wrap(const char *text) {
 }
 
 static void format_wind(char *out, size_t out_size) {
+  char spd[12];
   if (g_weather.has_now_wind_spd && g_weather.now_wind_dir[0]) {
-    snprintf(out, out_size, "Wind %s %d km/h", g_weather.now_wind_dir, g_weather.now_wind_kmh);
+    format_tenths(spd, sizeof(spd), g_weather.now_wind_kmh);
+    snprintf(out, out_size, "Wind %s %s km/h", g_weather.now_wind_dir, spd);
   } else if (g_weather.has_now_wind_spd) {
-    snprintf(out, out_size, "Wind %d km/h", g_weather.now_wind_kmh);
+    format_tenths(spd, sizeof(spd), g_weather.now_wind_kmh);
+    snprintf(out, out_size, "Wind %s km/h", spd);
   } else if (g_weather.cond_wind[0]) {
     snprintf(out, out_size, "Wind %s", g_weather.cond_wind);
   } else {
@@ -285,7 +294,9 @@ static void rebuild_lines(void) {
       char fdr[40];
       char note[48];
       if (g_weather.has_now_temp) {
-        snprintf(temp, sizeof(temp), "Temperature %d\xC2\xB0" "C", g_weather.now_temp);
+        char t[12];
+        format_tenths(t, sizeof(t), g_weather.now_temp);
+        snprintf(temp, sizeof(temp), "Temperature %s\xC2\xB0" "C", t);
       } else {
         snprintf(temp, sizeof(temp), "Temperature --");
       }
@@ -295,7 +306,9 @@ static void rebuild_lines(void) {
         snprintf(rainnow, sizeof(rainnow), "Rain --");
       }
       if (g_weather.has_now_hum) {
-        snprintf(hum, sizeof(hum), "Humidity %d%%", g_weather.now_hum);
+        char h[12];
+        format_tenths(h, sizeof(h), g_weather.now_hum);
+        snprintf(hum, sizeof(hum), "Humidity %s%%", h);
         suffix_mark(hum, sizeof(hum), NOW_CALC_HUM, '*');
       } else {
         snprintf(hum, sizeof(hum), "Humidity --");
@@ -315,7 +328,8 @@ static void rebuild_lines(void) {
       set_line(3, wind);
       set_line(4, uv);
       set_line(5, fdr);
-      format_obs_footnote(note, sizeof(note), NOW_CALC_HUM);
+      format_obs_footnote(note, sizeof(note), NOW_CALC_HUM,
+                          g_weather.day_count > 0 && uv_is_nearby(g_weather.days[0].uv));
       set_line(6, note);
     } else {
       char app[32];
@@ -326,14 +340,17 @@ static void rebuild_lines(void) {
       char sun[32];
       char note[48];
       if (g_weather.has_now_apparent) {
-        snprintf(app, sizeof(app), "Apparent %d\xC2\xB0" "C", g_weather.now_apparent);
+        char t[12];
+        format_tenths(t, sizeof(t), g_weather.now_apparent);
+        snprintf(app, sizeof(app), "Apparent %s\xC2\xB0" "C", t);
         suffix_mark(app, sizeof(app), NOW_CALC_APPARENT, '*');
       } else {
         snprintf(app, sizeof(app), "Apparent --");
       }
       if (g_weather.has_now_msl) {
-        snprintf(msl, sizeof(msl), "MSL %d.%d hPa",
-                 g_weather.now_msl / 10, (g_weather.now_msl < 0 ? -g_weather.now_msl : g_weather.now_msl) % 10);
+        char p[12];
+        format_tenths(p, sizeof(p), g_weather.now_msl);
+        snprintf(msl, sizeof(msl), "MSL %s hPa", p);
         if (g_weather.now_calc_flags & NOW_CALC_MSL_NEAR) {
           suffix_mark(msl, sizeof(msl), NOW_CALC_MSL_NEAR, '^');
         } else {
@@ -343,18 +360,24 @@ static void rebuild_lines(void) {
         snprintf(msl, sizeof(msl), "MSL --");
       }
       if (g_weather.has_now_gust) {
-        snprintf(gust, sizeof(gust), "Gust %d km/h", g_weather.now_gust);
+        char g[12];
+        format_tenths(g, sizeof(g), g_weather.now_gust);
+        snprintf(gust, sizeof(gust), "Gust %s km/h", g);
       } else {
         snprintf(gust, sizeof(gust), "Gust --");
       }
       if (g_weather.has_now_dew) {
-        snprintf(dew, sizeof(dew), "Dew %d\xC2\xB0" "C", g_weather.now_dew);
+        char t[12];
+        format_tenths(t, sizeof(t), g_weather.now_dew);
+        snprintf(dew, sizeof(dew), "Dew %s\xC2\xB0" "C", t);
         suffix_mark(dew, sizeof(dew), NOW_CALC_DEW, '*');
       } else {
         snprintf(dew, sizeof(dew), "Dew --");
       }
       if (g_weather.has_now_delta) {
-        snprintf(delta, sizeof(delta), "Delta-T %d\xC2\xB0" "C", g_weather.now_delta);
+        char t[12];
+        format_tenths(t, sizeof(t), g_weather.now_delta);
+        snprintf(delta, sizeof(delta), "Delta-T %s\xC2\xB0" "C", t);
         suffix_mark(delta, sizeof(delta), NOW_CALC_DELTA, '*');
       } else {
         snprintf(delta, sizeof(delta), "Delta-T --");
@@ -368,7 +391,7 @@ static void rebuild_lines(void) {
       set_line(5, sun);
       format_obs_footnote(note, sizeof(note),
                           NOW_CALC_APPARENT | NOW_CALC_DEW | NOW_CALC_DELTA |
-                          NOW_CALC_MSL_NEAR | NOW_CALC_MSL_INTERP);
+                          NOW_CALC_MSL_NEAR | NOW_CALC_MSL_INTERP, 0);
       set_line(6, note);
     }
     return;
@@ -384,15 +407,23 @@ static void rebuild_lines(void) {
     return;
   }
 
-  char temps[32];
-  if (d->min == 99 && d->max == 99) {
+  char temps[36];
+  if (d->min == TEMP_NONE && d->max == TEMP_NONE) {
     snprintf(temps, sizeof(temps), "Temps unavailable");
-  } else if (d->min == 99) {
-    snprintf(temps, sizeof(temps), "Max %d\xC2\xB0" "C", d->max);
-  } else if (d->max == 99) {
-    snprintf(temps, sizeof(temps), "Min %d\xC2\xB0" "C", d->min);
+  } else if (d->min == TEMP_NONE) {
+    char hi[12];
+    format_tenths(hi, sizeof(hi), d->max);
+    snprintf(temps, sizeof(temps), "Max %s\xC2\xB0" "C", hi);
+  } else if (d->max == TEMP_NONE) {
+    char lo[12];
+    format_tenths(lo, sizeof(lo), d->min);
+    snprintf(temps, sizeof(temps), "Min %s\xC2\xB0" "C", lo);
   } else {
-    snprintf(temps, sizeof(temps), "Min %d  Max %d\xC2\xB0" "C", d->min, d->max);
+    char lo[12];
+    char hi[12];
+    format_tenths(lo, sizeof(lo), d->min);
+    format_tenths(hi, sizeof(hi), d->max);
+    snprintf(temps, sizeof(temps), "Min %s  Max %s\xC2\xB0" "C", lo, hi);
   }
 
   char rain[48];
@@ -424,6 +455,9 @@ static void rebuild_lines(void) {
   char fdr[40];
   format_fdr(fdr, sizeof(fdr), d->fdr);
   set_line(5, fdr);
+  if (uv_is_nearby(d->uv)) {
+    set_line(6, "^ = Nearby");
+  }
 }
 
 static void layout_body(void) {
@@ -514,6 +548,9 @@ static void layout_body(void) {
       }
       x = start + cw + gap;
       lw = total - cw - gap;
+      text_layer_set_text_alignment(s_lines[i], GTextAlignmentLeft);
+    } else if (i == NUM_LINES - 1 && s_line_text[i][0] &&
+               (s_line_text[i][0] == '*' || s_line_text[i][0] == '^')) {
       text_layer_set_text_alignment(s_lines[i], GTextAlignmentLeft);
     } else if (s_index == DETAIL_CURRENT && i == NUM_LINES - 1) {
       text_layer_set_text_alignment(s_lines[i], GTextAlignmentLeft);

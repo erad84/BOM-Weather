@@ -110,14 +110,20 @@ static void draw_header(GContext *ctx, const Layer *cell_layer, uint16_t section
 }
 
 static void format_temps(char *out, size_t out_size, DayForecast *day) {
-  if (day->min == 99 && day->max == 99) {
+  char lo[12];
+  char hi[12];
+  if (day->min == TEMP_NONE && day->max == TEMP_NONE) {
     snprintf(out, out_size, "%s", day->precis);
-  } else if (day->min == 99) {
-    snprintf(out, out_size, "max %d\xC2\xB0" "C  %s", day->max, day->precis);
-  } else if (day->max == 99) {
-    snprintf(out, out_size, "min %d\xC2\xB0" "C  %s", day->min, day->precis);
+  } else if (day->min == TEMP_NONE) {
+    format_tenths(hi, sizeof(hi), day->max);
+    snprintf(out, out_size, "max %s\xC2\xB0" "C  %s", hi, day->precis);
+  } else if (day->max == TEMP_NONE) {
+    format_tenths(lo, sizeof(lo), day->min);
+    snprintf(out, out_size, "min %s\xC2\xB0" "C  %s", lo, day->precis);
   } else {
-    snprintf(out, out_size, "%d\xC2\xB0" "C - %d\xC2\xB0" "C  %s", day->min, day->max, day->precis);
+    format_tenths(lo, sizeof(lo), day->min);
+    format_tenths(hi, sizeof(hi), day->max);
+    snprintf(out, out_size, "%s\xC2\xB0" "C - %s\xC2\xB0" "C  %s", lo, hi, day->precis);
   }
 }
 
@@ -137,7 +143,9 @@ static const char *current_uv(void) {
 
 static void format_current_title(char *out, size_t out_size) {
   if (g_weather.has_now_temp) {
-    snprintf(out, out_size, "Current - %d\xC2\xB0" "C", g_weather.now_temp);
+    char t[12];
+    format_tenths(t, sizeof(t), g_weather.now_temp);
+    snprintf(out, out_size, "Current - %s\xC2\xB0" "C", t);
   } else {
     snprintf(out, out_size, "Current");
   }
@@ -145,11 +153,13 @@ static void format_current_title(char *out, size_t out_size) {
 
 static void format_current_sub(char *out, size_t out_size) {
   char hum[12];
-  char uv[20];
+  char uv[24];
   hum[0] = '\0';
   uv[0] = '\0';
   if (g_weather.has_now_hum) {
-    snprintf(hum, sizeof(hum), "H:%d%%", g_weather.now_hum);
+    char h[12];
+    format_tenths(h, sizeof(h), g_weather.now_hum);
+    snprintf(hum, sizeof(hum), "H:%s%%", h);
   }
   if (current_uv()[0]) {
     snprintf(uv, sizeof(uv), "UV %s", current_uv());
@@ -255,7 +265,7 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *index,
   }
   if (is_now_row(index)) {
     char title[32];
-    char sub[64];
+    char sub[80];
     format_current_title(title, sizeof(title));
     format_current_sub(sub, sizeof(sub));
     draw_named_row(ctx, cell_layer, current_icon(), title, sub);

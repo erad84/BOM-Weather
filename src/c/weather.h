@@ -39,6 +39,24 @@
 #define MAX_NOTICE 240
 #define MAX_WIND 32
 #define MAX_WIND_DIR 8
+
+#define TEMP_NONE 990
+
+static inline void format_tenths(char *out, size_t n, int tenths) {
+  if (!out || n < 2) {
+    return;
+  }
+  int neg = tenths < 0;
+  int a = neg ? -tenths : tenths;
+  int whole = a / 10;
+  int frac = a % 10;
+  if (frac) {
+    snprintf(out, n, "%s%d.%d", neg ? "-" : "", whole, frac);
+  } else {
+    snprintf(out, n, "%s%d", neg ? "-" : "", whole);
+  }
+}
+
 #define MAX_FDR 16
 #define MAX_SUN 8
 
@@ -86,8 +104,8 @@
 typedef struct {
   char name[MAX_DAY_NAME];
   char title[MAX_DAY_TITLE];
-  int min;
-  int max;
+  int min; /* tenths of °C; TEMP_NONE if missing */
+  int max; /* tenths of °C; TEMP_NONE if missing */
   char precis[MAX_PRECIS];
   int rain_chance;
   char rain_amount[MAX_RAIN];
@@ -112,14 +130,14 @@ typedef struct {
   DayForecast days[MAX_DAYS];
   char cond_wind[MAX_WIND];
   char now_wind_dir[MAX_WIND_DIR];
-  int now_temp;
-  int now_hum;
-  int now_delta;
-  int now_apparent;
+  int now_temp; /* tenths of °C */
+  int now_hum; /* tenths of % */
+  int now_delta; /* tenths of °C */
+  int now_apparent; /* tenths of °C */
   int now_msl; /* tenths of hPa */
-  int now_wind_kmh;
-  int now_gust;
-  int now_dew;
+  int now_wind_kmh; /* tenths of km/h */
+  int now_gust; /* tenths of km/h */
+  int now_dew; /* tenths of °C */
   char now_rain[12];
   int has_now_temp;
   int has_now_hum;

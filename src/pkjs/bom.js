@@ -48,6 +48,26 @@ var UV_AREA_ALIASES = {
   'gold coast': 'Surfers Paradise'
 };
 
+/* Copy UV from a nearby forecast area only within this radius. */
+var UV_NEARBY_KM = 250;
+var uvAreaCache = [];
+
+var CITY_FORECAST_PAGES = {
+  IDN10064: 'nsw/forecasts/sydney.shtml',
+  IDN10035: 'act/forecasts/canberra.shtml',
+  IDV10450: 'vic/forecasts/melbourne.shtml',
+  IDQ10605: 'qld/forecasts/brisbane.shtml',
+  IDS10034: 'sa/forecasts/adelaide.shtml',
+  IDW12300: 'wa/forecasts/perth.shtml',
+  IDT13600: 'tas/forecasts/hobart.shtml',
+  IDD10150: 'nt/forecasts/darwin.shtml'
+};
+
+var MONTH_NUM = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+};
+
 function decodeXml(s) {
   if (!s) return '';
   return s.replace(/&nbsp;/gi, ' ')
@@ -130,13 +150,7 @@ function xhrText(url, cb) {
   req.send();
 }
 
-function xhrTextFallback(path, cb) {
-  var urls = [
-    'https://reg.bom.gov.au/fwo/' + path,
-    'http://reg.bom.gov.au/fwo/' + path,
-    'https://www.bom.gov.au/fwo/' + path,
-    'http://www.bom.gov.au/fwo/' + path
-  ];
+function xhrTextFrom(urls, cb) {
   var i = 0;
   function next() {
     if (i >= urls.length) {
@@ -150,6 +164,22 @@ function xhrTextFallback(path, cb) {
     });
   }
   next();
+}
+
+function xhrTextFallback(path, cb) {
+  xhrTextFrom([
+    'https://reg.bom.gov.au/fwo/' + path,
+    'http://reg.bom.gov.au/fwo/' + path,
+    'https://www.bom.gov.au/fwo/' + path,
+    'http://www.bom.gov.au/fwo/' + path
+  ], cb);
+}
+
+function xhrPageFallback(path, cb) {
+  xhrTextFrom([
+    'https://reg.bom.gov.au/' + path,
+    'http://reg.bom.gov.au/' + path
+  ], cb);
 }
 
 function haversine(lat1, lon1, lat2, lon2) {
@@ -437,16 +467,17 @@ function parsePeriods(inner) {
     }
     var idx = body.match(/index="(\d+)"/);
     var start = body.match(/start-time-local="([^"]+)"/);
+    var forecast = tx('forecast');
     periods.push({
       index: idx ? +idx[1] : periods.length,
       start: start ? start[1] : '',
       min: el('air_temperature_minimum'),
       max: el('air_temperature_maximum'),
       precis: tx('precis'),
-      forecast: tx('forecast'),
+      forecast: forecast,
       pop: tx('probability_of_precipitation'),
       rain: el('precipitation_range'),
-      uv: el('uv_alert') || tx('uv_alert') || tx('uv'),
+      uv: el('uv_alert') || tx('uv_alert') || tx('uv') || uvFromForecastText(forecast),
       icon: el('forecast_icon_code')
     });
   }
@@ -506,15 +537,42 @@ function dayTitle(iso) {
   return names[dt.getUTCDay()] + ' ' + (+m[3]) + ' ' + months[+m[2] - 1];
 }
 
+function uvFromForecastText(text) {
+  if (!text) return '';
+  if (/UV Index/i.test(text)) return text;
+  if (/\[[^\]]*(Extreme|Very high|High|Moderate|Low)\]/i.test(text)) return text;
+  return '';
+}
+
+function titleUvCategory(cat) {
+  var s = collapseSpace(String(cat || ''));
+  if (!s) return '';
+  if (/^very\s*high$/i.test(s)) return 'Very High';
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
 function shortUv(raw) {
   if (!raw) return '';
-  var m = String(raw).match(/\[([^\]]+)\]/);
-  if (m) return m[1];
-  m = String(raw).match(/UV Index[^0-9]{0,20}([0-9]+)/i);
-  if (m) return m[1];
-  m = String(raw).match(/\b(Extreme|Very high|Very High|High|Moderate|Low)\b/i);
-  if (m) return m[1];
-  return String(raw).replace(/\.$/, '').slice(0, 15);
+  var s = String(raw);
+  var cat = '';
+  var num = '';
+  var m = s.match(/\[([^\]]+)\]/);
+  if (m) cat = m[1];
+  m = s.match(/UV Index[^0-9]{0,24}([0-9]+)/i);
+  if (m) num = m[1];
+  if (!num) {
+    m = s.match(/\b([0-9]{1,2})\s*\[/);
+    if (m) num = m[1];
+  }
+  if (!cat) {
+    m = s.match(/\b(Extreme|Very high|Very High|High|Moderate|Low)\b/i);
+    if (m) cat = m[1];
+  }
+  cat = titleUvCategory(cat);
+  if (cat && num) return cat + ' - ' + num;
+  if (cat) return cat;
+  if (num) return num;
+  return s.replace(/\.$/, '').slice(0, 18);
 }
 
 function weatherIcon(code, precis, rainChance) {
@@ -556,12 +614,14 @@ function toDays(periods, state) {
     var name = dayLabel(p.start);
     if (ymd && ymd === today) name = 'Today - ' + name;
     else if (ymd && ymd === tomorrow) name = 'Tomorrow - ' + name;
+    var min = p.min === '' ? 99 : parseFloat(p.min);
+    var max = p.max === '' ? 99 : parseFloat(p.max);
     days.push({
       name: name,
       title: dayTitle(p.start),
       ymd: ymd,
-      min: p.min === '' ? 99 : parseInt(p.min, 10),
-      max: p.max === '' ? 99 : parseInt(p.max, 10),
+      min: isFinite(min) ? min : 99,
+      max: isFinite(max) ? max : 99,
       precis: precis,
       rainChance: rainChance,
       rainAmount: p.rain || '',
@@ -585,7 +645,12 @@ function extraForDay(day, i, extraPeriods) {
   return byYmd || byIdx || extraPeriods[i] || null;
 }
 
-function mergeExtended(days, extraPeriods) {
+function markUvNearby(uv) {
+  if (!uv || uv.indexOf('^') >= 0) return uv;
+  return uv + '^';
+}
+
+function mergeExtended(days, extraPeriods, nearby) {
   if (!extraPeriods) return days;
   for (var i = 0; i < days.length; i++) {
     var extra = extraForDay(days[i], i, extraPeriods);
@@ -593,8 +658,13 @@ function mergeExtended(days, extraPeriods) {
     if (!days[i].extended && extra.forecast) {
       days[i].extended = extra.forecast;
     }
-    if (!days[i].uv && extra.uv) {
-      days[i].uv = shortUv(extra.uv);
+    if (!extra.uv) continue;
+    var next = shortUv(extra.uv);
+    if (!next) continue;
+    if (!days[i].uv) {
+      days[i].uv = nearby ? markUvNearby(next) : next;
+    } else if (!nearby && days[i].uv.indexOf('^') >= 0) {
+      days[i].uv = next;
     }
   }
   return days;
@@ -615,41 +685,98 @@ function periodsHaveUv(periods) {
   return false;
 }
 
+function areaNameCandidates(name) {
+  var raw = collapseSpace(name);
+  var out = [];
+  function add(s) {
+    s = collapseSpace(s);
+    if (!s) return;
+    var i;
+    for (i = 0; i < out.length; i++) {
+      if (out[i].toLowerCase() === s.toLowerCase()) return;
+    }
+    out.push(s);
+  }
+  add(raw);
+  if (UV_AREA_ALIASES[raw.toLowerCase()]) add(UV_AREA_ALIASES[raw.toLowerCase()]);
+  var stripped = raw.replace(/\s*\([^)]*\)/g, ' ');
+  stripped = stripped.replace(/\b(greater|outer)\b/gi, ' ');
+  stripped = stripped.replace(/\b(and|&)\s+(surrounds|surrounding\b.*|outer\b.*)$/i, ' ');
+  stripped = stripped.replace(/\b(metropolitan|metro|forecast|district|region|area|city)\b/gi, ' ');
+  stripped = collapseSpace(stripped);
+  add(stripped);
+  if (stripped && UV_AREA_ALIASES[stripped.toLowerCase()]) {
+    add(UV_AREA_ALIASES[stripped.toLowerCase()]);
+  }
+  var first = raw.split(/\s+and\s+|\s+&\s+|\s+\/\s+|,\s*/)[0];
+  add(first);
+  add(collapseSpace(
+    String(first || '').replace(/\b(metropolitan|metro|forecast|district|region|area|city)\b/gi, ' ')
+  ));
+  return out;
+}
+
 function coordsForAreaName(name) {
-  if (!name) return null;
-  var alias = UV_AREA_ALIASES[name.toLowerCase()];
-  var t = findTown(alias || name);
-  if (t && hasCoords(t)) return t;
-  var first = name.split(/ and | & | \/ |,/)[0].trim();
-  if (first && first !== name) {
-    t = findTown(first);
+  var list = areaNameCandidates(name);
+  var i;
+  for (i = 0; i < list.length; i++) {
+    var t = findTown(list[i]);
     if (t && hasCoords(t)) return t;
   }
   return null;
 }
 
-function nearestMetroPeriods(uvXml, loc) {
-  var re = /<area aac="([^"]+)" description="([^"]+)" type="metropolitan"/g;
+function uvResult(periods, nearby, donor) {
+  return { periods: periods || [], nearby: !!nearby, donor: donor || null };
+}
+
+function sameUvPlace(loc, place) {
+  if (!loc || !place) return false;
+  if (loc.aac && place.aac && loc.aac === place.aac) return true;
+  return normalize(loc.n) === normalize(place.n);
+}
+
+function nearestUvPeriods(uvXml, loc) {
+  if (!uvXml || !hasCoords(loc)) return uvResult([], false);
+  var re = /<area ([^>]+)>/g;
   var m;
-  var bestAac = '';
+  var bestPeriods = null;
+  var bestPlace = null;
   var bestD = 1e9;
-  var firstAac = '';
+  var areas = [];
+  var seen = {};
   while ((m = re.exec(uvXml))) {
-    if (!firstAac) firstAac = m[1];
-    var place = coordsForAreaName(m[2]);
-    if (!place || !hasCoords(loc)) continue;
+    var aac = xmlAttr(m[1], 'aac');
+    var desc = xmlAttr(m[1], 'description');
+    if (!aac || !desc) continue;
+    var inner = innerByAac(uvXml, aac);
+    if (!inner) continue;
+    var innerLc = inner.toLowerCase();
+    if (innerLc.indexOf('uv_alert') < 0 && innerLc.indexOf('uv index') < 0) continue;
+    var periods = parsePeriods(inner);
+    if (!periodsHaveUv(periods)) continue;
+    var place = coordsForAreaName(desc);
+    if (!place || !hasCoords(place)) continue;
+    var key = place.aac || place.n;
+    if (!seen[key]) {
+      seen[key] = true;
+      areas.push({ n: place.n, lat: place.lat, lon: place.lon });
+    }
     var d = haversine(loc.lat, loc.lon, place.lat, place.lon);
     if (d < bestD) {
       bestD = d;
-      bestAac = m[1];
+      bestPeriods = periods;
+      bestPlace = place;
     }
   }
-  var inner = innerByAac(uvXml, bestAac || firstAac);
-  var periods = parsePeriods(inner);
-  return periodsHaveUv(periods) ? periods : [];
+  if (areas.length) uvAreaCache = areas;
+  if (!bestPeriods || bestD > UV_NEARBY_KM) return uvResult([], false);
+  var donor = bestPlace ? { n: bestPlace.n, km: Math.round(bestD) } : null;
+  return uvResult(bestPeriods, !sameUvPlace(loc, bestPlace), donor);
 }
 
 function uvPeriodsForLoc(uvXml, precisXml, loc) {
+  if (!uvXml || !loc) return uvResult([], false);
   var seen = {};
   function tryAac(aac) {
     if (!aac || seen[aac]) return null;
@@ -659,24 +786,185 @@ function uvPeriodsForLoc(uvXml, precisXml, loc) {
   }
 
   var found = tryAac(loc && loc.aac);
-  if (found) return found;
+  if (found) return uvResult(found, false);
 
   var aac = loc && loc.aac;
   var i;
   for (i = 0; i < 8 && aac; i++) {
     var parent = parentAac(precisXml, aac) || parentAac(uvXml, aac);
     found = tryAac(parent);
-    if (found) return found;
+    if (found) return uvResult(found, false);
     aac = parent;
   }
 
   var types = ['metropolitan', 'location', 'public-district'];
-  for (i = 0; i < types.length; i++) {
+  for (i = 0; loc.n && i < types.length; i++) {
     found = parsePeriods(innerByDescription(uvXml, loc.n, types[i]));
-    if (periodsHaveUv(found)) return found;
+    if (periodsHaveUv(found)) return uvResult(found, false);
   }
 
-  return nearestMetroPeriods(uvXml, loc);
+  return nearestUvPeriods(uvXml, loc);
+}
+
+function nearestCityProductId(loc, skip) {
+  if (!hasCoords(loc)) return '';
+  var bestId = '';
+  var bestD = 1e9;
+  var i;
+  for (i = 0; i < towns.length; i++) {
+    var t = towns[i];
+    if (!t.c || (skip && skip[t.c]) || !hasCoords(t)) continue;
+    var d = haversine(loc.lat, loc.lon, t.lat, t.lon);
+    if (d < bestD) {
+      bestD = d;
+      bestId = t.c;
+    }
+  }
+  if (bestId && bestD <= UV_NEARBY_KM) return bestId;
+  return '';
+}
+
+function allDaysHaveUv(days) {
+  if (!days || !days.length) return false;
+  var i;
+  for (i = 0; i < days.length; i++) {
+    if (!days[i] || !days[i].uv) return false;
+  }
+  return true;
+}
+
+function forecastDir(state) {
+  return {
+    NSW: 'nsw',
+    ACT: 'act',
+    VIC: 'vic',
+    QLD: 'qld',
+    SA: 'sa',
+    WA: 'wa',
+    TAS: 'tas',
+    NT: 'nt'
+  }[state] || 'nsw';
+}
+
+function forecastSlugs(name) {
+  var n = normalize(name);
+  if (!n) return [];
+  var compact = n.replace(/ /g, '');
+  var hyphen = n.replace(/ /g, '-');
+  var out = [];
+  if (compact) out.push(compact);
+  if (hyphen && hyphen !== compact) out.push(hyphen);
+  return out;
+}
+
+function townForecastPaths(loc) {
+  if (!loc || !loc.n) return [];
+  var dir = forecastDir(loc.s);
+  var slugs = forecastSlugs(loc.n);
+  var i;
+  var paths = [];
+  for (i = 0; i < slugs.length; i++) {
+    paths.push(dir + '/forecasts/' + slugs[i] + '.shtml');
+  }
+  return paths;
+}
+
+function nearestCityForecast(loc) {
+  if (!hasCoords(loc)) return null;
+  var best = null;
+  var bestD = 1e9;
+  var i;
+  for (i = 0; i < towns.length; i++) {
+    var t = towns[i];
+    if (!t.c || !CITY_FORECAST_PAGES[t.c] || !hasCoords(t)) continue;
+    var d = haversine(loc.lat, loc.lon, t.lat, t.lon);
+    if (d < bestD) {
+      bestD = d;
+      best = t;
+    }
+  }
+  if (!best) return null;
+  return {
+    path: CITY_FORECAST_PAGES[best.c],
+    n: best.n,
+    km: Math.round(bestD)
+  };
+}
+
+function nearestCityForecastPath(loc) {
+  var city = nearestCityForecast(loc);
+  return city ? city.path : '';
+}
+
+function ymdFromForecastHeading(heading, state) {
+  var h = collapseSpace(decodeXml(heading));
+  if (!h) return '';
+  if (/rest of/i.test(h)) return localYmd(state);
+  var m = h.match(/(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i);
+  if (!m) return '';
+  var month = MONTH_NUM[m[3].toLowerCase()];
+  if (!month) return '';
+  var today = localYmd(state);
+  var year = today ? +today.slice(0, 4) : new Date().getFullYear();
+  var ymd = year + '-' + pad2(month) + '-' + pad2(+m[2]);
+  if (today && ymd < addYmd(today, -1)) {
+    ymd = (year + 1) + '-' + pad2(month) + '-' + pad2(+m[2]);
+  }
+  return ymd;
+}
+
+function parseForecastPageUv(html, state) {
+  if (!html) return [];
+  var periods = [];
+  var re = /<h2>\s*([^<]+)<\/h2>([\s\S]*?)(?=<h2>|$)/gi;
+  var m;
+  while ((m = re.exec(html))) {
+    var ymd = ymdFromForecastHeading(m[1], state);
+    if (!ymd) continue;
+    var alertRe = /<p class="alert">([^<]+)<\/p>/gi;
+    var raw = '';
+    var am;
+    while ((am = alertRe.exec(m[2]))) {
+      if (/UV Index/i.test(am[1])) {
+        raw = decodeXml(am[1]);
+        break;
+      }
+    }
+    if (!raw) continue;
+    periods.push({
+      index: periods.length,
+      start: ymd + 'T00:00:00',
+      forecast: '',
+      uv: raw
+    });
+  }
+  return periods;
+}
+
+function fillUvFromPages(loc, days, cb) {
+  if (allDaysHaveUv(days)) return cb(days, null);
+  var paths = townForecastPaths(loc);
+  var city = nearestCityForecast(loc);
+  var cityPath = city ? city.path : '';
+  if (cityPath && paths.indexOf(cityPath) < 0) paths.push(cityPath);
+  var i = 0;
+  function next() {
+    if (i >= paths.length || allDaysHaveUv(days)) return cb(days, null);
+    var path = paths[i++];
+    var nearby = cityPath && path === cityPath;
+    xhrPageFallback(path, function (err, html) {
+      if (!err && html) {
+        var periods = parseForecastPageUv(html, loc.s);
+        if (periodsHaveUv(periods)) {
+          days = mergeExtended(days, periods, nearby);
+          if (!nearby) return cb(days, null);
+          return cb(days, city);
+        }
+      }
+      next();
+    });
+  }
+  next();
 }
 
 function districtName(xml, aac) {
@@ -998,16 +1286,21 @@ function rawFromStation(stn) {
   };
 }
 
-function roundFilledObs(obs) {
+function roundFilledObs(obs, decimals) {
   if (!obs) return null;
-  if (obs.temp != null) obs.temp = Math.round(obs.temp);
-  if (obs.hum != null) obs.hum = Math.round(obs.hum);
-  if (obs.deltaT != null) obs.deltaT = Math.round(obs.deltaT);
-  if (obs.apparent != null) obs.apparent = Math.round(obs.apparent);
-  if (obs.msl != null) obs.msl = Math.round(obs.msl * 10) / 10;
-  if (obs.windKmh != null) obs.windKmh = Math.round(obs.windKmh);
-  if (obs.gust != null) obs.gust = Math.round(obs.gust);
-  if (obs.dew != null) obs.dew = Math.round(obs.dew);
+  function r(v) {
+    if (v == null) return null;
+    if (decimals) return Math.round(v * 10) / 10;
+    return Math.round(v);
+  }
+  if (obs.temp != null) obs.temp = r(obs.temp);
+  if (obs.hum != null) obs.hum = r(obs.hum);
+  if (obs.deltaT != null) obs.deltaT = r(obs.deltaT);
+  if (obs.apparent != null) obs.apparent = r(obs.apparent);
+  if (obs.msl != null) obs.msl = r(obs.msl);
+  if (obs.windKmh != null) obs.windKmh = r(obs.windKmh);
+  if (obs.gust != null) obs.gust = r(obs.gust);
+  if (obs.dew != null) obs.dew = r(obs.dew);
   var dir = obs.windDir || '';
   var spd = obs.windKmh;
   var wind = '';
@@ -1024,7 +1317,7 @@ function roundFilledObs(obs) {
   return obs;
 }
 
-function fillObsAt(lat, lon, list) {
+function fillObsAt(lat, lon, list, decimals) {
   if (typeof lat !== 'number' || typeof lon !== 'number' || !list || !list.length) return null;
   var nearest = nearestFrom(list, lat, lon);
   if (!nearest) return null;
@@ -1032,7 +1325,58 @@ function fillObsAt(lat, lon, list) {
   if (!obs) return null;
   fillThermo(obs);
   fillMsl(obs, list, lat, lon);
-  return roundFilledObs(obs);
+  return roundFilledObs(obs, decimals);
+}
+
+function uvFillFromDays(days, donor) {
+  var nearby = false;
+  var i;
+  for (i = 0; days && i < days.length; i++) {
+    if (days[i] && days[i].uv && days[i].uv.indexOf('^') >= 0) {
+      nearby = true;
+      break;
+    }
+  }
+  if (!nearby) return { nearby: false };
+  return {
+    nearby: true,
+    name: (donor && donor.n) || 'nearby forecast',
+    km: donor && donor.km != null ? donor.km : null
+  };
+}
+
+function uvFillNotes(uvFill) {
+  var notes = [];
+  if (!uvFill || !uvFill.nearby) return notes;
+  if (uvFill.name && uvFill.km != null) {
+    notes.push('UV^ \u2014 pulled from ' + uvFill.name + ' (' + uvFill.km + ' km)');
+  } else if (uvFill.name) {
+    notes.push('UV^ \u2014 pulled from ' + uvFill.name);
+  } else {
+    notes.push('UV^ \u2014 pulled from nearby forecast');
+  }
+  return notes;
+}
+
+function uvFillForCoords(lat, lon) {
+  if (typeof lat !== 'number' || typeof lon !== 'number' || !uvAreaCache || !uvAreaCache.length) {
+    return { nearby: false };
+  }
+  var best = null;
+  var bestD = 1e9;
+  var i;
+  for (i = 0; i < uvAreaCache.length; i++) {
+    var a = uvAreaCache[i];
+    if (!a || typeof a.lat !== 'number' || typeof a.lon !== 'number') continue;
+    var d = haversine(lat, lon, a.lat, a.lon);
+    if (d < bestD) {
+      bestD = d;
+      best = a;
+    }
+  }
+  if (!best || bestD > UV_NEARBY_KM) return { nearby: false };
+  if (bestD < 15) return { nearby: false };
+  return { nearby: true, name: best.n, km: Math.round(bestD) };
 }
 
 function obsFillNotes(obs) {
@@ -1090,7 +1434,11 @@ function obsPageHelpersSource() {
     rawFromStation.toString(),
     roundFilledObs.toString(),
     fillObsAt.toString(),
-    obsFillNotes.toString()
+    obsFillNotes.toString(),
+    'var UV_NEARBY_KM=' + UV_NEARBY_KM + ';',
+    'var uvAreaCache=' + JSON.stringify(uvAreaCache || []) + ';',
+    uvFillForCoords.toString(),
+    uvFillNotes.toString()
   ].join('\n');
 }
 
@@ -1179,16 +1527,20 @@ function loadStatesObs(states, cb) {
   });
 }
 
-function fetchNearestObs(loc, cb) {
+function fetchNearestObs(loc, decimals, cb) {
+  if (typeof decimals === 'function') {
+    cb = decimals;
+    decimals = false;
+  }
   var home = (loc && loc.s) || 'NSW';
   var product = OBS_PRODUCTS[home] || OBS_PRODUCTS.NSW;
   loadObsProduct(product, function (stations) {
-    var obs = fillObsAt(loc.lat, loc.lon, stations);
+    var obs = fillObsAt(loc.lat, loc.lon, stations, decimals);
     if (obs && obs.msl != null) return cb(null, obs);
     var neigh = OBS_NEIGHBOURS[home] || [];
     if (!neigh.length) return cb(null, obs);
     loadStatesObs(neigh, function (extra) {
-      cb(null, fillObsAt(loc.lat, loc.lon, mergeObsStations(stations, extra)));
+      cb(null, fillObsAt(loc.lat, loc.lon, mergeObsStations(stations, extra), decimals));
     });
   });
 }
@@ -1749,10 +2101,11 @@ function fetchForecast(loc, opts, cb) {
           warning: extras.warnings[0] || null,
           fdr: (finalDays[0] && finalDays[0].fdr) || '',
           sunrise: sun.rise,
-          sunset: sun.set
+          sunset: sun.set,
+          uvFill: uvFillFromDays(finalDays, uvDonor)
         });
       }
-      fetchNearestObs(loc, function (oErr, obs) {
+      fetchNearestObs(loc, !!opts.decimals, function (oErr, obs) {
         extras.obs = obs || null;
         one();
       });
@@ -1770,28 +2123,48 @@ function fetchForecast(loc, opts, cb) {
       }
     }
 
+    var uvDonor = null;
+    function rememberUvDonor(donor) {
+      if (donor && donor.n) uvDonor = donor;
+    }
+
     var extraIds = [];
     if (loc.c) extraIds.push(loc.c);
     var uvId = UV_BY_STATE[loc.s];
     if (uvId && extraIds.indexOf(uvId) < 0) extraIds.push(uvId);
-    if (!extraIds.length) return finish(days);
+    var queued = {};
+    var q;
+    for (q = 0; q < extraIds.length; q++) queued[extraIds[q]] = true;
+    var cityId = nearestCityProductId(loc, queued);
+    if (cityId && extraIds.indexOf(cityId) < 0) extraIds.push(cityId);
+
+    function afterExtras(daysSoFar) {
+      fillUvFromPages(loc, daysSoFar, function (days, pageDonor) {
+        if (pageDonor) rememberUvDonor(pageDonor);
+        finish(days);
+      });
+    }
+
+    if (!extraIds.length) return afterExtras(days);
 
     function applyCityXml(cityXml, daysSoFar) {
       var locInner = innerByAac(cityXml, loc.aac) ||
         innerByDescription(cityXml, loc.n, 'location') ||
         innerByDescription(cityXml, loc.n, 'metropolitan');
-      daysSoFar = mergeExtended(daysSoFar, parsePeriods(locInner));
-      return mergeExtended(daysSoFar, uvPeriodsForLoc(cityXml, xml, loc));
+      daysSoFar = mergeExtended(daysSoFar, parsePeriods(locInner), false);
+      var uv = uvPeriodsForLoc(cityXml, xml, loc);
+      if (uv.nearby && uv.donor) rememberUvDonor(uv.donor);
+      return mergeExtended(daysSoFar, uv.periods, uv.nearby);
     }
 
     function fetchExtra(i, daysSoFar) {
-      if (i >= extraIds.length) return finish(daysSoFar);
+      if (i >= extraIds.length) return afterExtras(daysSoFar);
       xhrTextFallback(extraIds[i] + '.xml', function (cityErr, cityXml) {
         if (!cityErr && cityXml) {
           daysSoFar = applyCityXml(cityXml, daysSoFar);
         }
-        if (daysSoFar[0] && daysSoFar[0].uv && i + 1 < extraIds.length) {
-          return finish(daysSoFar);
+        if (allDaysHaveUv(daysSoFar) && i + 1 < extraIds.length) {
+          return afterExtras(daysSoFar);
         }
         fetchExtra(i + 1, daysSoFar);
       });
@@ -1819,6 +2192,7 @@ module.exports = {
   obsStationLabelForLoc: obsStationLabelForLoc,
   fillObsAt: fillObsAt,
   obsFillNotes: obsFillNotes,
+  uvFillNotes: uvFillNotes,
   obsCalcMask: obsCalcMask,
   obsPageHelpersSource: obsPageHelpersSource
 };

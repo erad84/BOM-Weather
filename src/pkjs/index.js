@@ -34,6 +34,11 @@ function coastalOn() {
   return s.CoastalDetails === true || s.CoastalDetails === 1 || s.CoastalDetails === '1';
 }
 
+function decimalsOn() {
+  var s = loadSettings();
+  return s.ShowDecimals === true || s.ShowDecimals === 1 || s.ShowDecimals === '1';
+}
+
 function payloadInt(p, name) {
   if (!p) return 0;
   var v = p[name];
@@ -111,14 +116,28 @@ function sendStatus(code, location) {
   });
 }
 
+function packDayTemp(v) {
+  if (!isFinite(v) || v === 99) return 990;
+  var n = decimalsOn() ? v : Math.round(v);
+  return Math.round(n * 10);
+}
+
+function formatObsNum(v) {
+  if (v == null || v === '') return '';
+  var n = Number(v);
+  if (!isFinite(n)) return '';
+  if (Math.round(n * 10) % 10 !== 0) return (Math.round(n * 10) / 10).toFixed(1);
+  return String(Math.round(n));
+}
+
 function packDays(days) {
   var lines = [];
   for (var i = 0; i < days.length && i < 7; i++) {
     var d = days[i];
     lines.push([
       clip(d.name, 21),
-      isFinite(d.min) ? d.min : 99,
-      isFinite(d.max) ? d.max : 99,
+      packDayTemp(d.min),
+      packDayTemp(d.max),
       clip((d.precis || '').replace(/\t|\n/g, ' '), 41),
       isFinite(d.rainChance) ? d.rainChance : -1,
       clip((d.rainAmount || '').replace(/\t|\n/g, ' '), 21),
@@ -169,17 +188,17 @@ function forecastDict(result) {
     DaysPacked: packDays(result.days)
   };
   if (result.obs) {
-    dict.CondLine1 = result.obs.temp != null ? String(result.obs.temp) : '';
+    dict.CondLine1 = result.obs.temp != null ? formatObsNum(result.obs.temp) : '';
     dict.CondLine2 = [
-      result.obs.hum != null ? String(result.obs.hum) : '',
-      result.obs.deltaT != null ? String(result.obs.deltaT) : '',
+      result.obs.hum != null ? formatObsNum(result.obs.hum) : '',
+      result.obs.deltaT != null ? formatObsNum(result.obs.deltaT) : '',
       clip(result.obs.wind || '', 31),
-      result.obs.apparent != null ? String(result.obs.apparent) : '',
-      result.obs.msl != null ? (Math.round(result.obs.msl * 10) / 10).toFixed(1) : '',
+      result.obs.apparent != null ? formatObsNum(result.obs.apparent) : '',
+      result.obs.msl != null ? formatObsNum(result.obs.msl) : '',
       clip(result.obs.windDir || '', 7),
-      result.obs.windKmh != null ? String(result.obs.windKmh) : '',
-      result.obs.gust != null ? String(result.obs.gust) : '',
-      result.obs.dew != null ? String(result.obs.dew) : '',
+      result.obs.windKmh != null ? formatObsNum(result.obs.windKmh) : '',
+      result.obs.gust != null ? formatObsNum(result.obs.gust) : '',
+      result.obs.dew != null ? formatObsNum(result.obs.dew) : '',
       clip(result.obs.rain || '', 11),
       String(bom.obsCalcMask(result.obs) || '')
     ].join('\t');
@@ -304,6 +323,7 @@ function fetchForecast() {
     sendStatus(1, loc.n);
     bom.fetchForecast(loc, {
       coastal: coastalOn(),
+      decimals: decimalsOn(),
       skipWarningPages: isAplite()
     }, function (fetchErr, result) {
       if (fetchErr) {
@@ -719,7 +739,10 @@ function openConfig() {
       postcodesBlob: postcodesBlob(),
       townCount: bom.getTowns().length,
       refreshStatus: refreshStatusText(),
-      showRadar: hasRadar()
+      showRadar: hasRadar(),
+      uvNote: lastForecast ? bom.uvFillNotes(lastForecast.uvFill).join('\n') : '',
+      uvLat: lastForecast && lastForecast.lat != null ? lastForecast.lat : null,
+      uvLon: lastForecast && lastForecast.lon != null ? lastForecast.lon : null
     };
     function show(manualLoc) {
       if (manualLoc) {
@@ -781,6 +804,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
       RadarOvTopography: settings.RadarOvTopography,
       RadarOvWaterways: settings.RadarOvWaterways,
       CoastalDetails: settings.CoastalDetails,
+      ShowDecimals: settings.ShowDecimals,
       Theme: settings.Theme
     });
     try { localStorage.setItem('bomTownRefreshStatus', 'Refreshing...'); } catch (err) {}
