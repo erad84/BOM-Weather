@@ -1,0 +1,27 @@
+# Thin caller: build BOM Weather on PR + push to main.
+# Reusable: erad84/pebble-ci @v1 (https://github.com/erad84/pebble-ci)
+# Optional CloudPebble install when PEBBLE_FIREBASE_REFRESH_TOKEN is set.
+
+name: pebble-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: erad84/pebble-ci/.github/workflows/pebble-build-reusable.yml@v1
+    with:
+      working-directory: '.'
+      artifact-name: BOM-Weather
+      npm-install: auto
+      # Install the .pbw to the watch via CloudPebble after a green build.
+      # Skips (build still succeeds) until PEBBLE_FIREBASE_REFRESH_TOKEN is set.
+      install-cloudpebble: true
+    # Pass caller-repo secrets into the reusable workflow (names must match).
+    secrets: inherit
